@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.3.0';
+const VERSION='1.3.1';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const STORE='kv', META='meta', DATA='data';

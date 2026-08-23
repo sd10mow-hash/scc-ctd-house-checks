@@ -251,3 +251,134 @@ a{color:var(--accent)}
   .report-dot{font-size:7px}
   .search-result{align-items:flex-start}
 }
+
+/* v1.3.1 BLACK GLASS + VISIBLE METALLIC HARDWARE */
+:root{
+  --chrome-1:#f4f7f8;
+  --chrome-2:#b7c0c6;
+  --chrome-3:#68737b;
+  --chrome-4:#2f383e;
+}
+
+/* brushed-metal top lips on the black-glass surfaces */
+.panel,.card,.stat,.lock{position:relative}
+.panel:before,.stat:before,.lock:before{
+  content:"";
+  position:absolute;
+  left:16px; right:16px; top:0;
+  height:3px;
+  border-radius:0 0 4px 4px;
+  background:linear-gradient(90deg,
+    #2f373c 0%,#8d989f 8%,#eef2f4 19%,#737e85 31%,
+    #c9d0d4 42%,#ffffff 50%,#78838a 59%,#d7dde0 72%,#626d74 87%,#2b3338 100%);
+  box-shadow:0 1px 0 rgba(255,255,255,.18),0 2px 5px rgba(0,0,0,.45);
+  opacity:.72;
+  pointer-events:none;
+}
+.card:before{
+  content:"";
+  position:absolute;left:12px;right:12px;top:0;height:3px;
+  background:linear-gradient(90deg,
+    #30383d,#a6b0b6 12%,#f3f6f7 24%,#707b82 38%,
+    #ffffff 50%,#737e85 64%,#d3dade 78%,#465158 100%);
+  border-radius:0 0 3px 3px;
+  opacity:.70;
+  pointer-events:none;
+}
+
+/* small chrome corner plates, deliberately visible */
+.panel:after,.card:after{
+  content:"";
+  position:absolute;
+  right:10px;bottom:9px;
+  width:34px;height:8px;
+  border:1px solid rgba(228,234,238,.28);
+  border-radius:4px;
+  background:linear-gradient(180deg,#cfd6da 0%,#6f7a82 36%,#333c42 62%,#aeb8be 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 2px 6px rgba(0,0,0,.38);
+  opacity:.42;
+  pointer-events:none;
+}
+
+/* unmistakably metallic buttons/nav while retaining teal active state */
+.nav button,.btn{
+  position:relative;
+  overflow:hidden;
+  border:1px solid rgba(218,226,231,.36);
+  background:
+    linear-gradient(180deg,
+      rgba(244,247,248,.18) 0%,
+      rgba(164,175,183,.13) 13%,
+      rgba(49,59,66,.96) 42%,
+      rgba(12,17,20,.98) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.32),
+    inset 0 -1px 0 rgba(0,0,0,.72),
+    0 7px 18px rgba(0,0,0,.30);
+}
+.nav button:before,.btn:before{
+  content:"";
+  position:absolute;left:9px;right:9px;top:2px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.82),transparent);
+  opacity:.68;
+  pointer-events:none;
+}
+.nav button.active,.btn.primary{
+  border-color:rgba(167,236,226,.58);
+  background:
+    linear-gradient(180deg,
+      rgba(241,247,248,.22) 0%,
+      rgba(125,154,155,.16) 14%,
+      #193a3d 45%,
+      #091f21 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.34),
+    inset 0 -1px 0 rgba(0,0,0,.74),
+    0 0 0 1px rgba(71,235,211,.12),
+    0 9px 24px rgba(0,0,0,.36);
+}
+
+/* metal housing around hidden door codes */
+.codebox{
+  border:1px solid rgba(220,228,233,.36);
+  background:
+    linear-gradient(145deg,
+      rgba(238,242,244,.11) 0%,
+      rgba(102,114,122,.10) 28%,
+      rgba(13,19,22,.92) 70%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.30),
+    inset 0 -1px 0 rgba(0,0,0,.72),
+    0 8px 22px rgba(0,0,0,.30);
+}
+
+/* silver divider beneath major title bars */
+.titlebar{position:relative;padding-bottom:9px}
+.titlebar:after{
+  content:"";
+  position:absolute;left:0;right:0;bottom:0;height:2px;
+  background:linear-gradient(90deg,
+    transparent 0%,#6c777e 10%,#d8dfe3 26%,#737f86 42%,
+    #eef2f4 50%,#677279 61%,#cbd3d7 77%,transparent 100%);
+  opacity:.52;
+}
+
+/* polished metallic badges / room hardware */
+.badge,.roomno{
+  text-shadow:0 1px 0 #000;
+}
+.badge{
+  border-color:rgba(214,223,228,.30);
+  background:linear-gradient(180deg,rgba(236,240,242,.14),rgba(72,83,90,.17) 38%,#11171b 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.24);
+}
+
+/* stronger metal frame on the lock panel and icon */
+.lock{
+  border-color:rgba(214,223,228,.22);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 0 0 1px rgba(195,207,214,.08),0 24px 70px rgba(0,0,0,.54);
+}
+.logo{
+  border:1px solid rgba(228,234,238,.38);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 0 0 1px rgba(71,235,211,.18),0 20px 50px rgba(0,0,0,.46);
+}
