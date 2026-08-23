@@ -220,3 +220,34 @@ a{color:var(--accent)}
 .startup-error h2{margin-top:0;color:#ffaaaa}
 .version{font-size:10px;opacity:.55;margin-left:6px}
 @media(max-width:700px){.history-card{align-items:flex-start}}
+
+.houseflag .complete{color:#6ee7b7;font-weight:800}
+
+.required-note-alert{margin-top:7px;padding:7px 9px;border:1px solid rgba(239,100,100,.4);background:rgba(239,100,100,.09);border-radius:9px;color:#ffb0aa;font-size:12px;font-weight:800}
+.note.note-required{border-color:#ef6464;box-shadow:0 0 0 2px rgba(239,100,100,.12)}
+.report-note{display:block;margin-top:1px;font-size:6px;font-weight:600;line-height:1.15;color:#333}
+
+/* v1.3.0 privacy + search + history calendar */
+.titlebar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.privacy-btn{border-color:rgba(71,235,211,.34)}
+.privacy-hint{font-size:11px;color:var(--muted);margin-top:8px}
+.searchbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:12px}
+.searchbar input{font-size:18px;letter-spacing:.06em}
+.search-results{display:grid;gap:8px}
+.search-result{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.calendar-panel{overflow:hidden}
+.calendar-head{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;text-align:center;margin-bottom:10px}
+.calendar-head strong{font-size:18px}
+.calweek,.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.calweek span{text-align:center;color:var(--muted);font-size:10px;font-weight:800;padding:4px 0}
+.calcell{min-height:64px;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:6px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;text-align:left}
+.calcell.empty{border-color:transparent;background:transparent;pointer-events:none}
+.calcell.has-report{border-color:rgba(71,235,211,.42);background:rgba(71,235,211,.06)}
+.calcell.selected{box-shadow:0 0 0 2px rgba(71,235,211,.28) inset;background:rgba(71,235,211,.11)}
+.daynum{font-size:13px;font-weight:850}
+.report-dot{font-size:8px;color:var(--accent);font-weight:850}
+@media(max-width:520px){
+  .calcell{min-height:52px;padding:5px}
+  .report-dot{font-size:7px}
+  .search-result{align-items:flex-start}
+}

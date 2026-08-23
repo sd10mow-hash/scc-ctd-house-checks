@@ -1,19 +1,51 @@
 
 (()=>{'use strict';
 
-const VERSION='1.2.0';
+const VERSION='1.3.0';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const STORE='kv', META='meta', DATA='data';
 const ENC=new TextEncoder(), DEC=new TextDecoder();
 let cryptoKey=null,state=null,screen='tonight',activePropertyId=null,editPropertyId=null,editLocationId=null;
 let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
+let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
+let historyCalendarDate=new Date(),historySelectedDate=null;
 
 const deepClone=o=>typeof structuredClone==='function'?structuredClone(o):JSON.parse(JSON.stringify(o));
 const uuid=()=>crypto.randomUUID?crypto.randomUUID():('id_'+Date.now()+'_'+Math.random().toString(16).slice(2));
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const digits=s=>String(s??'').replace(/\D/g,'');
 const fmtPhone=n=>{const d=digits(n);return d.length===11&&d[0]==='1'?`1 (${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`:d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:String(n??'')};
+const partsOfName=name=>String(name||'').trim().split(/\s+/).filter(Boolean);
+function maskClientName(name){
+  const parts=partsOfName(name);
+  if(!parts.length)return '';
+  const first=parts[0].slice(0,3);
+  const last=(parts.length>1?parts[parts.length-1]:'').slice(0,3);
+  return last?`${first} ${last}`:first;
+}
+function clientSearchKey(name){
+  return maskClientName(name).replace(/[^a-z0-9]/gi,'').toLowerCase();
+}
+function displayClientName(name){
+  return showFullNames?String(name||''):maskClientName(name);
+}
+function hideFullNames(){
+  showFullNames=false;
+  clearTimeout(nameRevealTimer);
+  nameRevealTimer=null;
+}
+function revealFullNamesTemporarily(){
+  showFullNames=true;
+  clearTimeout(nameRevealTimer);
+  nameRevealTimer=setTimeout(()=>{
+    showFullNames=false;
+    if(state)render();
+  },45000);
+}
+function nameRevealButton(label='Show All Names'){
+  return `<button class="btn privacy-btn" id="toggleNames">${showFullNames?'Hide Full Names':label}</button>`;
+}
 const clients=p=>p.rooms.filter(r=>r.type==='client');
 const checkKey=(pid,room)=>`${pid}::${room}`;
 
@@ -75,9 +107,30 @@ function getCheck(pid,room){
   const k=checkKey(pid,room);
   return state.currentRun.checks[k]||(state.currentRun.checks[k]={status:'',note:''});
 }
+function requiresNote(status){
+  return !!status && status!=='Home';
+}
+function checkResolved(c){
+  if(!c?.status)return false;
+  return !requiresNote(c.status) || !!String(c.note||'').trim();
+}
+function requiredNoteIssues(properties=state.properties,checks=state.currentRun.checks){
+  const issues=[];
+  for(const p of properties){
+    if(p.checkRequired===false)continue;
+    for(const r of p.rooms){
+      if(r.type!=='client')continue;
+      const c=checks[checkKey(p.id,r.room)];
+      if(c?.status && requiresNote(c.status) && !String(c.note||'').trim()){
+        issues.push({propertyId:p.id,address:p.address,room:r.room,name:r.name,status:c.status});
+      }
+    }
+  }
+  return issues;
+}
 function progress(p){
   if(!p.checkRequired)return {done:0,total:0,pct:100,missing:0};
-  const list=clients(p), done=list.filter(r=>getCheck(p.id,r.room).status).length;
+  const list=clients(p), done=list.filter(r=>checkResolved(getCheck(p.id,r.room))).length;
   return {done,total:list.length,pct:list.length?Math.round(done/list.length*100):100,missing:list.length-done};
 }
 function totalsFor(properties=state.properties,checks=state.currentRun.checks){
@@ -88,7 +141,7 @@ function totalsFor(properties=state.properties,checks=state.currentRun.checks){
       if(r.type!=='client')continue;
       required++;
       const c=checks[checkKey(p.id,r.room)];
-      if(c?.status)checked++;else missing++;
+      if(checkResolved(c))checked++;else missing++;
     }
   }
   return {required,checked,missing,notRequired};
@@ -191,6 +244,7 @@ async function start(){
 /* ---------- Lock / Setup ---------- */
 async function showLock(){
   clearTimeout(autoLockTimer);
+  hideFullNames();
   const exists=await databaseExists();
   APP.innerHTML=`<section class="lock panel">
     <div class="logo"><img src="icon-192.png" alt="House Checks"></div>
@@ -248,15 +302,17 @@ function renderShell(){
 }
 function drawNav(){
   const nav=document.getElementById('nav');
-  const items=[['tonight','Tonight'],['route','Route'],['report','Report'],['history','History'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
+  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
   nav.innerHTML=items.map(([k,l])=>`<button data-nav="${k}" class="${screen===k?'active':''}">${l}</button>`).join('');
   nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
+    hideFullNames();
     screen=b.dataset.nav;activePropertyId=editPropertyId=editLocationId=null;reportApproved=false;historyOpenId=null;render();
   });
 }
 function render(){
   drawNav();
   if(activePropertyId)return renderHouse();
+  if(screen==='search')return renderClientSearch();
   if(screen==='route')return renderRoute();
   if(screen==='report')return renderReport();
   if(screen==='history')return renderHistory();
@@ -272,7 +328,7 @@ function houseClass(p){return `house-${p.houseColor||'none'} ${p.checkRequired==
 function renderTonight(){
   const view=document.getElementById('view'),T=totalsFor();
   view.innerHTML=`<section class="panel">
-    <div class="title">Tonight’s House Checks</div>
+    <div class="titlebar"><div class="title">Tonight’s House Checks</div>${nameRevealButton()}</div>
     <div class="kpirow">
       <div class="kpi"><strong>${T.checked}</strong>Checked</div>
       <div class="kpi"><strong>${T.missing}</strong>Missing</div>
@@ -285,56 +341,103 @@ function renderTonight(){
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
     return `<article class="card ${houseClass(p)}">
       <h3>${p.houseColor?`<span class="house-color ${p.houseColor}"></span> `:''}${esc(p.address)}</h3>
-      <div class="houseflag">${p.checkRequired!==false?`<span class="required">● CHECK REQUIRED</span>`:`<span class="notrequired">● NOT REQUIRED TONIGHT</span>`}</div>
+      <div class="houseflag">${
+        p.checkRequired===false
+          ? `<span class="notrequired">● NOT REQUIRED TONIGHT</span>`
+          : g.missing>0
+            ? `<span class="required">● CHECKS REQUIRED</span>`
+            : `<span class="complete">● COMPLETE</span>`
+      }</div>
       <div class="meta">${p.beds} beds • ${p.checkRequired===false?'excluded from missing count':`${g.done}/${g.total} checked`} • ${open} open • ${noBed} no bed</div>
       <div class="progress"><span style="width:${g.pct}%"></span></div>
       <div class="actions"><button class="btn ${p.checkRequired!==false?'primary':''}" data-open="${esc(p.id)}">${p.checkRequired!==false?'Open House':'View House'}</button>${p.checkRequired!==false?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet. Import the private starter data from Database, or add properties manually.</div></div>'}</section>
   <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderTonight()};
   view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()});
-  document.getElementById('finishRun').onclick=()=>{screen='report';reportApproved=false;render()};
+  document.getElementById('finishRun').onclick=()=>{hideFullNames();screen='report';reportApproved=false;render()};
 }
 function roomCheckHtml(p,r,i){
   if(r.type==='open')return `<div class="room"><div class="roomno">${esc(r.room)}</div><div><span class="tag open">OPEN / EMPTY</span></div></div>`;
   if(r.type==='nobed')return `<div class="room"><div class="roomno">${esc(r.room)}</div><div><span class="tag nobed">NO BED</span></div></div>`;
-  const c=getCheck(p.id,r.room);
+  const c=getCheck(p.id,r.room),noteNeeded=requiresNote(c.status),noteMissing=noteNeeded&&!String(c.note||'').trim();
   return `<div class="room"><div class="roomno">${esc(r.room)}</div><div>
-    <div class="name ${r.color||'none'}">${esc(r.name)}</div>
+    <div class="name ${r.color||'none'}">${esc(displayClientName(r.name))}</div>
     ${r.phone?`<div class="muted"><a href="tel:${esc(r.phone)}">${esc(fmtPhone(r.phone))}</a></div>`:''}
     ${r.note?`<div class="muted">${esc(r.note)}</div>`:''}
     ${p.checkRequired===false
       ?`<div class="status-note">No house check required tonight. This client will still appear on the complete final report.</div>`
-      :`<div class="statuses">${['Home','Not Home','Sleep','Pass'].map(s=>`<button class="status ${c.status===s?'sel':''}" data-i="${i}" data-status="${s}">${s}</button>`).join('')}</div><textarea class="note" data-note="${i}" placeholder="Tonight’s note…">${esc(c.note)}</textarea>`}
+      :`<div class="statuses">${['Home','Not Home','Sleep','Pass'].map(s=>`<button class="status ${c.status===s?'sel':''}" data-i="${i}" data-status="${s}">${s}</button>`).join('')}</div>
+        ${noteMissing?`<div class="required-note-alert">NOTE REQUIRED for ${esc(c.status)} before this client is resolved.</div>`:''}
+        <textarea class="note ${noteMissing?'note-required':''}" data-note="${i}" ${noteNeeded?'required':''} placeholder="${noteNeeded?'Required note — explain '+esc(c.status)+'…':'Optional note…'}">${esc(c.note)}</textarea>`}
   </div></div>`;
 }
 function renderHouse(){
   const p=state.properties.find(x=>x.id===activePropertyId);if(!p){activePropertyId=null;return render()}
   const g=progress(p),view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="househead">
-    <div><button class="btn" id="backHouses">← Houses</button><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${p.checkRequired!==false?'<span class="required">CHECK REQUIRED</span>':'<span class="notrequired">NOT REQUIRED TONIGHT</span>'}</div><div class="muted">${p.beds} beds ${p.checkRequired!==false?`• ${g.done}/${g.total} checked`:''}</div></div>
+    <div><div class="actions"><button class="btn" id="backHouses">← Houses</button>${nameRevealButton()}</div><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${
+      p.checkRequired===false
+        ? '<span class="notrequired">NOT REQUIRED TONIGHT</span>'
+        : g.missing>0
+          ? '<span class="required">CHECKS REQUIRED</span>'
+          : '<span class="complete">COMPLETE</span>'
+    }</div><div class="muted">${p.beds} beds ${p.checkRequired!==false?`• ${g.done}/${g.total} checked`:''}</div></div>
     <div class="codebox"><b>Door code:</b> ${revealCode?esc(p.doorCode||'Not entered'):'••••••'} <button class="btn" id="toggleCode">${revealCode?'Hide':'Reveal'}</button></div>
   </div></section>
   <section class="panel">${p.rooms.map((r,i)=>roomCheckHtml(p,r,i)).join('')}</section>
   <div class="actions"><button class="btn primary" id="doneHouse">Done With House</button><button class="btn" id="editHouse">Edit Property</button></div>`;
-  document.getElementById('backHouses').onclick=()=>{activePropertyId=null;render()};
+  document.getElementById('backHouses').onclick=()=>{hideFullNames();activePropertyId=null;render()};
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderHouse()};
   document.getElementById('toggleCode').onclick=()=>{revealCode=!revealCode;renderHouse()};
-  document.getElementById('doneHouse').onclick=()=>{activePropertyId=null;render()};
+  document.getElementById('doneHouse').onclick=async()=>{
+    view.querySelectorAll('[data-note]').forEach(n=>{
+      const r=p.rooms[+n.dataset.note];
+      getCheck(p.id,r.room).note=n.value;
+    });
+    const issues=requiredNoteIssues([p],state.currentRun.checks);
+    if(issues.length){
+      await saveState();
+      alert(`A note is required for ${displayClientName(issues[0].name)} because ${issues[0].status} is selected.`);
+      renderHouse();
+      const target=[...document.querySelectorAll('[data-note]')].find(n=>{
+        const r=p.rooms[+n.dataset.note];
+        return r && r.room===issues[0].room;
+      });
+      target?.focus();
+      return;
+    }
+    await saveState();
+    activePropertyId=null;render();
+  };
   document.getElementById('editHouse').onclick=()=>{editPropertyId=p.id;activePropertyId=null;screen='properties';render()};
   view.querySelectorAll('.status').forEach(b=>b.onclick=async()=>{
-    const r=p.rooms[+b.dataset.i];getCheck(p.id,r.room).status=b.dataset.status;await saveState();renderHouse();
+    const r=p.rooms[+b.dataset.i],c=getCheck(p.id,r.room);
+    c.status=b.dataset.status;
+    await saveState();
+    const needsNote=requiresNote(c.status)&&!String(c.note||'').trim();
+    renderHouse();
+    if(needsNote){
+      const target=document.querySelector(`[data-note="${b.dataset.i}"]`);
+      target?.focus();
+    }
   });
   view.querySelectorAll('[data-note]').forEach(n=>n.onchange=async()=>{
-    const r=p.rooms[+n.dataset.note];getCheck(p.id,r.room).note=n.value;await saveState();
+    const r=p.rooms[+n.dataset.note];getCheck(p.id,r.room).note=n.value;await saveState();renderHouse();
   });
 }
 
 /* ---------- Properties ---------- */
 function renderProperties(){
   const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="title">Properties & Rosters</div><div class="muted">Manage addresses, bed capacity, door codes, house colors, and whether a house requires a check tonight.</div></section>
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Manage addresses, bed capacity, door codes, house colors, and whether a house requires a check tonight. Client names are masked by default.</div></section>
   <section class="grid">${state.properties.map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${p.checkRequired!==false?'check required':'not required tonight'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>
   <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button></div><div id="propertyEditor"></div>`;
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderProperties()};
   view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{editPropertyId=b.dataset.edit;renderProperties()});
   view.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{
     const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p||!confirm(`Remove ${p.address}?`))return;
@@ -350,7 +453,7 @@ function roomEditorHtml(r,i){
   return `<div class="roomedit" data-row="${i}">
     <input data-f="room" value="${esc(r.room)}" aria-label="Room">
     <select data-f="type"><option value="client" ${r.type==='client'?'selected':''}>Client</option><option value="open" ${r.type==='open'?'selected':''}>Open</option><option value="nobed" ${r.type==='nobed'?'selected':''}>No Bed</option></select>
-    <input data-f="name" value="${esc(r.type==='client'?r.name:'')}" placeholder="Client name">
+    <input data-f="name" value="${esc(r.type==='client'?(showFullNames?r.name:maskClientName(r.name)):'')}" data-fullname="${esc(r.name||'')}" placeholder="Client name">
     <input class="wide" data-f="phone" value="${esc(r.phone||'')}" placeholder="Cell phone">
     <select data-f="color"><option value="" ${!r.color?'selected':''}>No color</option><option value="green" ${r.color==='green'?'selected':''}>Green</option><option value="gray" ${r.color==='gray'?'selected':''}>Gray</option></select>
     <button class="btn red" data-remove="${i}">Remove</button>
@@ -392,11 +495,53 @@ function renderPropertyEditor(p){
     p.checkRequired=document.getElementById('propRequired').checked;
     e.querySelectorAll('[data-row]').forEach(row=>{
       const r=p.rooms[+row.dataset.row];r.room=row.querySelector('[data-f="room"]').value.trim()||String(+row.dataset.row+1);r.type=row.querySelector('[data-f="type"]').value;
-      r.name=r.type==='client'?(row.querySelector('[data-f="name"]').value.trim()||'Unnamed Client'):r.type==='open'?'OPEN':'NO BED';
+      if(r.type==='client'){
+        const nameInput=row.querySelector('[data-f="name"]'),typed=nameInput.value.trim(),original=nameInput.dataset.fullname||'';
+        r.name=(!showFullNames && typed===maskClientName(original)) ? original : (typed||'Unnamed Client');
+      }else r.name=r.type==='open'?'OPEN':'NO BED';
       r.phone=r.type==='client'?row.querySelector('[data-f="phone"]').value.trim():'';r.color=r.type==='client'?row.querySelector('[data-f="color"]').value:'';
     });
     p.beds=p.rooms.length;await saveState();editPropertyId=null;renderProperties();
   };
+}
+
+
+/* ---------- 3x3 Client Search ---------- */
+function clientSearchResults(query){
+  const q=String(query||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  if(q.length<3)return [];
+  const out=[];
+  for(const p of state.properties){
+    for(const r of p.rooms){
+      if(r.type!=='client')continue;
+      const key=clientSearchKey(r.name);
+      if(key.includes(q) || q.includes(key)){
+        out.push({property:p,room:r,key});
+      }
+    }
+  }
+  return out;
+}
+function renderClientSearch(){
+  const view=document.getElementById('view'),results=clientSearchResults(clientSearchQuery);
+  view.innerHTML=`<section class="panel">
+    <div class="titlebar"><div><div class="title">3×3 Client Search</div><div class="muted">Search using the first 3 letters of the first name + first 3 letters of the last name. Example: Bra Wal or BraWal.</div></div>${nameRevealButton()}</div>
+    <div class="searchbar"><input id="clientSearch" autocomplete="off" placeholder="e.g. Bra Wal" value="${esc(clientSearchQuery)}"><button class="btn" id="clearSearch">Clear</button></div>
+    <div class="privacy-hint">Full names are hidden by default. “Show All Names” is temporary and automatically hides again.</div>
+  </section>
+  <section class="search-results">${
+    clientSearchQuery.replace(/[^a-z0-9]/gi,'').length<3
+      ? '<div class="panel"><div class="muted">Enter at least 3 letters to search.</div></div>'
+      : results.length
+        ? results.map(x=>`<article class="card search-result"><div><div class="name ${x.room.color||'none'}">${esc(displayClientName(x.room.name))}</div><div class="meta">${esc(x.property.address)} • Room ${esc(x.room.room)}</div></div><button class="btn primary" data-findhouse="${esc(x.property.id)}">Open House</button></article>`).join('')
+        : '<div class="panel"><div class="muted">No matching client found.</div></div>'
+  }</section>`;
+  const input=document.getElementById('clientSearch');
+  input.oninput=()=>{clientSearchQuery=input.value;renderClientSearch();const again=document.getElementById('clientSearch');again?.focus();again?.setSelectionRange(again.value.length,again.value.length)};
+  document.getElementById('clearSearch').onclick=()=>{clientSearchQuery='';renderClientSearch()};
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientSearch()};
+  view.querySelectorAll('[data-findhouse]').forEach(b=>b.onclick=()=>{hideFullNames();activePropertyId=b.dataset.findhouse;revealCode=false;render()});
 }
 
 /* ---------- Locations + Route ---------- */
@@ -460,30 +605,42 @@ function statusFor(snapshot,p,r){
   if(r.type==='open')return 'OPEN';
   if(r.type==='nobed')return 'NO BED';
   if(p.checkRequired===false)return 'NOT REQ';
-  return snapshot.checks[checkKey(p.id,r.room)]?.status||'MISSING';
+  const c=snapshot.checks[checkKey(p.id,r.room)];
+  if(!c?.status)return 'MISSING';
+  if(requiresNote(c.status)&&!String(c.note||'').trim())return `${c.status} • NOTE REQ`;
+  return c.status;
 }
 function reportPaper(snapshot,id='reportPaper'){
   const T=totalsFor(snapshot.properties,snapshot.checks),stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();
   return `<div class="paper" id="${id}">
     <div class="paperhead"><div class="papertitle">HOUSE CHECK REPORT</div><div class="papermeta">${esc(snapshot.driverName||'Driver')} • ${esc(stamp.toLocaleString())} • ${T.checked}/${T.required} checked • ${T.missing} missing • ${T.notRequired} houses N/R</div></div>
     <div class="papergrid">${snapshot.properties.map(p=>`<div class="paperhouse house-${p.houseColor||'none'}"><h4>${esc(p.address)} • ${p.beds} beds${p.checkRequired===false?' • NOT REQUIRED TONIGHT':''}</h4>${p.rooms.map(r=>{
-      const status=statusFor(snapshot,p,r), cls=r.type==='open'?'open':r.type==='nobed'?'nobed':p.checkRequired===false?'notrequired':status==='MISSING'?'missing':r.color||'';
-      return `<div class="paperrow ${cls}"><span>${esc(r.room)}</span><span>${esc(r.name)}</span><span>${esc(status)}</span></div>`;
+      const status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim(), cls=r.type==='open'?'open':r.type==='nobed'?'nobed':p.checkRequired===false?'notrequired':(status==='MISSING'||status.includes('NOTE REQ'))?'missing':r.color||'';
+      return `<div class="paperrow ${cls}"><span>${esc(r.room)}</span><span>${esc(displayClientName(r.name))}${nightNote?`<small class="report-note">${esc(nightNote)}</small>`:''}</span><span>${esc(status)}</span></div>`;
     }).join('')}</div>`).join('')}</div>
     <div class="paperfoot">Complete roster report. Houses marked NOT REQUIRED remain included. MISSING means a required client has no recorded check result. Report anyone you can't reach and can't see to the on-call person.</div>
   </div>`;
 }
 function renderReport(){
   const view=document.getElementById('view'),snap=currentSnapshot(),T=totalsFor();
-  view.innerHTML=`<section class="panel"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify missing vs not-required before approval.'}</div></section>
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div>${nameRevealButton()}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify missing vs not-required before approval.'} Client names are masked by default.</div></section>
   <section class="reportwrap">${reportPaper(snap)}</section>
   <section class="panel">${reportApproved?`<div class="delivery">
     <button class="btn" id="previewAgain">Preview Again</button><button class="btn" id="printReport">Print</button><button class="btn" id="saveReport">Save Snapshot</button><button class="btn" id="emailReport">Email Report</button><button class="btn green" id="textReport">Text Report</button><button class="btn primary" id="completeRun">Complete & Save to History</button>
   </div>`:`<div class="actions"><button class="btn" id="backChecks">← Back to Checks</button><button class="btn primary" id="approveReport">Approve Complete Report</button></div>`}
   <div class="notice">${reportApproved?`Report text recipient: ${esc(fmtPhone(state.settings.reportTextNumber))}. No message is sent until you finish it in Messages.`:`${T.checked} checked • ${T.missing} missing • ${T.notRequired} houses not required • ${state.properties.length} total houses in report.`}</div></section>`;
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderReport()};
   if(!reportApproved){
-    document.getElementById('backChecks').onclick=()=>{screen='tonight';render()};
-    document.getElementById('approveReport').onclick=()=>{reportApproved=true;renderReport()};
+    document.getElementById('backChecks').onclick=()=>{hideFullNames();screen='tonight';render()};
+    document.getElementById('approveReport').onclick=()=>{
+      const issues=requiredNoteIssues();
+      if(issues.length){
+        alert(`${issues.length} non-Home result${issues.length===1?'':'s'} still require${issues.length===1?'s':''} a note. First: ${displayClientName(issues[0].name)} at ${issues[0].address} (${issues[0].status}).`);
+        return;
+      }
+      reportApproved=true;renderReport();
+    };
   }else{
     document.getElementById('previewAgain').onclick=()=>{reportApproved=false;renderReport()};
     document.getElementById('printReport').onclick=()=>window.print();
@@ -505,10 +662,10 @@ async function makeReportPng(snapshot){
     x.strokeStyle='#555';x.strokeRect(px,py,cw,h);x.fillStyle=headColors[p.houseColor]||'#2d6f9f';x.fillRect(px,py,cw,hh);
     x.fillStyle=p.houseColor==='yellow'?'#111':'#fff';x.font='bold 11px system-ui';x.textAlign='left';x.fillText(`${p.address} • ${p.beds} beds${p.checkRequired===false?' • NOT REQUIRED':''}`,px+6,py+18);
     p.rooms.forEach((r,i)=>{
-      const ry=py+hh+i*rh,status=statusFor(snapshot,p,r);
+      const ry=py+hh+i*rh,status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim();
       let fill='#fff';
       if(r.type==='open')fill='#fff4a6';else if(r.type==='nobed')fill='#e46a61';else if(p.checkRequired===false)fill='#f2edcf';else if(status==='MISSING')fill='#ffd9d6';else if(r.color==='green')fill='#cdebe3';else if(r.color==='gray')fill='#ddd';
-      x.fillStyle=fill;x.fillRect(px,ry,cw,rh);x.strokeStyle='#bbb';x.strokeRect(px,ry,cw,rh);x.fillStyle='#111';x.font='10px system-ui';x.textAlign='left';x.fillText(`${r.room}  ${r.name}`,px+5,ry+14);x.textAlign='right';x.fillText(status,px+cw-5,ry+14);
+      x.fillStyle=fill;x.fillRect(px,ry,cw,rh);x.strokeStyle='#bbb';x.strokeRect(px,ry,cw,rh);x.fillStyle='#111';x.font='10px system-ui';x.textAlign='left';x.fillText(`${r.room}  ${maskClientName(r.name)}${nightNote?' • '+nightNote:''}`.slice(0,52),px+5,ry+14);x.textAlign='right';x.fillText(status,px+cw-5,ry+14);
     });ys[col]+=h+8;
   }
   x.fillStyle='#111';x.textAlign='left';x.font='12px system-ui';x.fillText("Complete roster report. NOT REQUIRED remains included; MISSING means a required client has no result.",28,H-24);
@@ -534,24 +691,76 @@ async function emailSnapshot(snapshot){
   await downloadSnapshot(snapshot);location.href=`mailto:?subject=${encodeURIComponent('House Check Report')}&body=${encodeURIComponent(msg+' Report image saved for attachment.')}`;
 }
 async function completeRun(){
+  const issues=requiredNoteIssues();
+  if(issues.length){
+    alert(`Cannot complete this run yet. ${issues.length} non-Home result${issues.length===1?'':'s'} still need${issues.length===1?'s':''} a note.`);
+    reportApproved=false;
+    renderReport();
+    return;
+  }
   const snap=currentSnapshot(new Date().toISOString()),T=totalsFor(snap.properties,snap.checks);
   state.history.push({...snap,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired});
   state.currentRun={id:uuid(),startedAt:new Date().toISOString(),checks:{}};
-  reportApproved=false;await saveState();alert('Completed report saved to History. A fresh nightly run is ready.');screen='history';render();
+  reportApproved=false;hideFullNames();await saveState();alert('Completed report saved to History. A fresh nightly run is ready.');screen='history';historyCalendarDate=new Date();historySelectedDate=historyLocalDateKey(snap.completedAt);render();
 }
 
 /* ---------- History ---------- */
+function historyLocalDateKey(iso){
+  const d=new Date(iso);
+  const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function calendarMonthData(date){
+  const y=date.getFullYear(),m=date.getMonth();
+  const first=new Date(y,m,1),last=new Date(y,m+1,0);
+  return {y,m,firstDay:first.getDay(),days:last.getDate()};
+}
+function shiftHistoryMonth(delta){
+  historyCalendarDate=new Date(historyCalendarDate.getFullYear(),historyCalendarDate.getMonth()+delta,1);
+  historySelectedDate=null;
+  renderHistory();
+}
 function renderHistory(){
   const view=document.getElementById('view');
   if(historyOpenId){
     const h=state.history.find(x=>x.id===historyOpenId);if(!h){historyOpenId=null;return renderHistory()}
-    view.innerHTML=`<section class="panel"><button class="btn" id="backHistory">← History</button><div class="title" style="margin-top:10px">Completed Report • ${esc(new Date(h.completedAt).toLocaleString())}</div><div class="muted">Saved final report. It does not change when the current roster changes.</div></section>
+    view.innerHTML=`<section class="panel"><div class="titlebar"><div><button class="btn" id="backHistory">← Calendar</button><div class="title" style="margin-top:10px">Completed Report • ${esc(new Date(h.completedAt).toLocaleString())}</div><div class="muted">Saved final report. It does not change when the current roster changes.</div></div>${nameRevealButton()}</div></section>
     <section class="reportwrap">${reportPaper(h)}</section><section class="panel"><div class="delivery"><button class="btn" id="histPrint">Print</button><button class="btn" id="histSave">Save Snapshot</button><button class="btn" id="histEmail">Email</button><button class="btn green" id="histText">Text Again</button></div></section>`;
-    document.getElementById('backHistory').onclick=()=>{historyOpenId=null;renderHistory()};
+    document.getElementById('backHistory').onclick=()=>{hideFullNames();historyOpenId=null;renderHistory()};
+    const nameToggle=document.getElementById('toggleNames');
+    if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderHistory()};
     document.getElementById('histPrint').onclick=()=>window.print();document.getElementById('histSave').onclick=()=>downloadSnapshot(h);document.getElementById('histEmail').onclick=()=>emailSnapshot(h);document.getElementById('histText').onclick=()=>textSnapshot(h);return;
   }
-  view.innerHTML=`<section class="panel"><div class="title">History</div><div class="muted">History is the shelf of completed final reports. Current roster changes do not rewrite these reports.</div></section>
-  <section class="history-list">${state.history.length?state.history.slice().reverse().map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleString())}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} missing • ${h.notRequired??0} houses N/R</div></div><button class="btn primary" data-history="${esc(h.id)}">Open Report</button></article>`).join(''):'<div class="panel"><div class="muted">No completed reports yet.</div></div>'}</section>`;
+
+  const {y,m,firstDay,days}=calendarMonthData(historyCalendarDate);
+  const monthName=historyCalendarDate.toLocaleString(undefined,{month:'long',year:'numeric'});
+  const counts={};
+  for(const h of state.history){
+    if(!h.completedAt)continue;
+    const key=historyLocalDateKey(h.completedAt);
+    counts[key]=(counts[key]||0)+1;
+  }
+  const cells=[];
+  for(let i=0;i<firstDay;i++)cells.push('<div class="calcell empty"></div>');
+  for(let day=1;day<=days;day++){
+    const key=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`,count=counts[key]||0;
+    cells.push(`<button class="calcell ${count?'has-report':''} ${historySelectedDate===key?'selected':''}" data-date="${key}"><span class="daynum">${day}</span>${count?`<span class="report-dot">${count} report${count===1?'':'s'}</span>`:''}</button>`);
+  }
+  const selected=historySelectedDate ? state.history.filter(h=>historyLocalDateKey(h.completedAt)===historySelectedDate).slice().reverse() : [];
+  view.innerHTML=`<section class="panel"><div class="title">History Report Calendar</div><div class="muted">Choose any month, then tap a highlighted date to open completed reports. History can go back as far as reports exist.</div></section>
+  <section class="panel calendar-panel">
+    <div class="calendar-head"><button class="btn" id="prevMonth">←</button><strong>${esc(monthName)}</strong><button class="btn" id="nextMonth">→</button></div>
+    <div class="calweek">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<span>${d}</span>`).join('')}</div>
+    <div class="calendar-grid">${cells.join('')}</div>
+    <div class="actions"><button class="btn" id="calendarToday">Current Month</button></div>
+  </section>
+  ${historySelectedDate?`<section class="panel"><div class="title">Reports for ${esc(new Date(historySelectedDate+'T12:00:00').toLocaleDateString())}</div>
+    <div class="history-list">${selected.length?selected.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} missing • ${h.notRequired??0} houses N/R</div></div><button class="btn primary" data-history="${esc(h.id)}">Open Report</button></article>`).join(''):'<div class="muted">No completed report on this date.</div>'}</div>
+  </section>`:''}`;
+  document.getElementById('prevMonth').onclick=()=>shiftHistoryMonth(-1);
+  document.getElementById('nextMonth').onclick=()=>shiftHistoryMonth(1);
+  document.getElementById('calendarToday').onclick=()=>{historyCalendarDate=new Date();historySelectedDate=null;renderHistory()};
+  view.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{historySelectedDate=b.dataset.date;renderHistory()});
   view.querySelectorAll('[data-history]').forEach(b=>b.onclick=()=>{historyOpenId=b.dataset.history;renderHistory()});
 }
 
