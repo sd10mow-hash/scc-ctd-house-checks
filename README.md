@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.6.2
+# SCC-CTD House Checks v1.6.3
 
 GitHub-ready public PWA build.
 
-## v1.6.2 Route Planner rebuild
+## v1.6.3 Route Planner rebuild
 
 - Rebuilt Route Planner around three clean entry points: Plan Route, Locations, and Saved Routes.
 - Plan Route now keeps start point, stop selection, ordering, save/load, and route execution in one coherent workspace.

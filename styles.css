@@ -1355,3 +1355,24 @@ a{color:var(--accent)}
   .route-row-controls{grid-template-columns:36px 36px 36px;gap:3px;width:114px}
   .route-arrow,.route-remove{width:36px;height:42px}
 }
+
+
+/* v1.6.3 Starting Location layout */
+.route-start-shell{display:grid;grid-template-columns:minmax(0,1fr) 104px;gap:9px;align-items:stretch;margin:12px 0 10px}
+.route-start-display{min-height:98px;border:1px solid rgba(71,235,211,.34);background:rgba(71,235,211,.07);border-radius:14px;padding:13px 14px;display:grid;grid-template-columns:108px minmax(0,1fr);gap:12px;align-items:center}
+.route-start-caption{font-size:12px;line-height:1.15;font-weight:950;letter-spacing:.06em;color:var(--accent)}
+.route-start-copy{min-width:0;text-align:right;display:grid;gap:4px;justify-items:end}
+.route-start-copy strong{font-size:16px;line-height:1.2;font-weight:950;overflow-wrap:anywhere}
+.route-start-copy span{font-size:12px;line-height:1.3;color:var(--muted);overflow-wrap:anywhere}
+.route-start-quick{display:grid;grid-template-rows:1fr 1fr;gap:8px}
+.route-start-mini{min-height:45px;padding:8px 6px;display:grid;place-items:center;align-content:center;gap:2px;font-size:16px}
+.route-start-mini span{font-size:9px;font-weight:950;letter-spacing:.07em}
+.route-other-picker{margin:-2px 0 12px;padding:12px;border:1px solid rgba(71,235,211,.26);background:rgba(71,235,211,.035);border-radius:13px}
+.route-other-picker .actions{margin-top:8px}
+@media(max-width:420px){
+  .route-start-shell{grid-template-columns:minmax(0,1fr) 92px;gap:7px}
+  .route-start-display{grid-template-columns:88px minmax(0,1fr);gap:9px;padding:11px 10px;min-height:94px}
+  .route-start-caption{font-size:10px}
+  .route-start-copy strong{font-size:14px}
+  .route-start-copy span{font-size:11px}
+}

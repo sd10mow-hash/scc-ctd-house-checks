@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.2';
+const VERSION='1.6.3';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -13,7 +13,7 @@ let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
 let inspectionView='calendar',inspectionDayKey=null,reportOrigin='menu';
 let settingsView='menu';
-let routePlannerView='menu',routePickerKind='',routePickerDraft=null,routeInlineMode='';
+let routePlannerView='menu',routePickerKind='',routePickerDraft=null,routeInlineMode='',routeStartPickerOpen=false;
 let codesUnlocked=false;
 
 const deepClone=o=>typeof structuredClone==='function'?structuredClone(o):JSON.parse(JSON.stringify(o));
@@ -1554,7 +1554,7 @@ function smartRouteStops(){
   for(const g of groups)g.items.sort((a,b)=>addressParts(stopAddress(a)).number-addressParts(stopAddress(b)).number);
   return groups.flatMap(g=>g.items);
 }
-function setRouteView(view){routePlannerView=view;routePickerKind='';routePickerDraft=null;routeInlineMode='';renderRoute()}
+function setRouteView(view){routePlannerView=view;routePickerKind='';routePickerDraft=null;routeInlineMode='';routeStartPickerOpen=false;renderRoute()}
 function routeHasWork(){return validRouteStops().length>0}
 
 function renderRouteMenu(){
@@ -1648,12 +1648,16 @@ function renderRouteCreate(){
   if(routePickerKind)return renderRoutePicker(routePickerKind);
   const view=document.getElementById('view'),stops=validRouteStops(),allStarts=orderedRouteLocations();
   setModulePrevious(()=>setRouteView('menu'),'Route Planner');
-  const startValue=state.route.startMode==='location'&&locationById(state.route.startLocationId)?state.route.startLocationId:'__current__',transport=transportationLocation();
+  const startValue=state.route.startMode==='location'&&locationById(state.route.startLocationId)?state.route.startLocationId:'__current__',transport=transportationLocation(),startLoc=currentStartLocation();
+  const startName=startValue==='__current__'?'Current Position':(startLoc?.name||'Selected Location');
+  const startAddress=startValue==='__current__'?'Phone GPS will be used when navigation opens.':(startLoc?.address||'No address saved.');
   view.innerHTML=`<section class="panel route-plan-head"><div><div class="title">Plan Route</div><div class="muted">Add the stops, put them in the order you want, then start the route.</div></div><button class="btn red" id="routeClear" ${stops.length?'':'disabled'}>Clear</button></section>
-  <section class="panel route-start-panel"><div class="field"><label>Start From</label><select id="routeStart"><option value="__current__" ${startValue==='__current__'?'selected':''}>Current Position</option>${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div>${transport?`<button class="btn route-home-button" id="routeHomeStart" ${startValue===transport.id?'disabled':''}>🏢 Use Transportation Home</button>`:''}</section>
   <section class="route-add-strip"><button class="route-tool-button" id="routeClientHomes">🏠 <span><b>CLIENT HOMES</b><small>Select one, several, or all</small></span></button><button class="route-tool-button" id="routeLocationPicker">📍 <span><b>LOCATIONS</b><small>Business and saved places</small></span></button><button class="route-tool-button" id="routeInsertAddress">＋ <span><b>ENTER ADDRESS</b><small>One-time stop</small></span></button></section>
   ${renderRouteInlineForm()}
-  <section class="panel route-order-panel"><div class="route-order-head"><div><div class="title">Route Order</div><div class="muted">${stops.length?`${stops.length} destination${stops.length===1?'':'s'}. Use the arrows whenever you want to change the order.`:'Add destinations above to begin.'}</div></div><button class="btn" id="routeSmart" ${stops.length<2?'disabled':''}>🧠 Smart Route</button></div><div id="routeOrder" class="route-order-list"></div></section>
+  <section class="panel route-order-panel"><div class="route-order-head"><div><div class="title">Route Order</div><div class="muted">${stops.length?`${stops.length} destination${stops.length===1?'':'s'}. Use the arrows whenever you want to change the order.`:'Add destinations above to begin.'}</div></div><button class="btn" id="routeSmart" ${stops.length<2?'disabled':''}>🧠 Smart Route</button></div>
+  <div class="route-start-shell"><div class="route-start-display"><div class="route-start-caption">STARTING<br>LOCATION</div><div class="route-start-copy"><strong>${esc(startName)}</strong><span>${esc(startAddress)}</span></div></div><div class="route-start-quick"><button class="btn route-start-mini" id="routeCurrentStart" ${startValue==='__current__'?'disabled':''}>📍<span>CURRENT</span></button><button class="btn route-start-mini" id="routeOtherStart">•••<span>OTHER</span></button></div></div>
+  ${routeStartPickerOpen?`<div class="route-other-picker"><div class="field"><label>Choose Starting Location</label><select id="routeOtherStartSelect">${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div><div class="actions"><button class="btn" id="routeOtherCancel">Cancel</button><button class="btn primary" id="routeOtherApply" ${allStarts.length?'':'disabled'}>Use Location</button></div>${allStarts.length?'':'<div class="muted">No saved locations yet. Add one from Locations.</div>'}</div>`:''}
+  <div id="routeOrder" class="route-order-list"></div></section>
   <section class="route-plan-actions"><button class="btn" id="routeLoad">📂 Load Saved</button><button class="btn" id="routeSave" ${stops.length?'':'disabled'}>💾 Save Route</button><button class="btn primary route-start-route" id="routeStartRun" ${stops.length?'':'disabled'}>▶ START ROUTE</button></section>`;
   wireRouteInlineForm();
   document.getElementById('routeClientHomes').onclick=()=>{routePickerKind='clients';renderRoute()};
@@ -1662,12 +1666,14 @@ function renderRouteCreate(){
   document.getElementById('routeSmart').onclick=async()=>{state.route.stops=smartRouteStops();resetRouteProgress();await saveState();renderRouteCreate()};
   document.getElementById('routeSave').onclick=()=>{routeInlineMode='save';renderRouteCreate()};
   document.getElementById('routeLoad').onclick=()=>{routePlannerView='load';renderSavedRoutes(true)};
-  document.getElementById('routeStart').onchange=async e=>{if(e.target.value==='__current__'){state.route.startMode='current';state.route.startLocationId=''}else{state.route.startMode='location';state.route.startLocationId=e.target.value}resetRouteProgress();await saveState();renderRouteCreate()};
-  if(document.getElementById('routeHomeStart'))document.getElementById('routeHomeStart').onclick=async()=>{state.route.startMode='location';state.route.startLocationId=transport.id;resetRouteProgress();await saveState();renderRouteCreate()};
+  document.getElementById('routeCurrentStart').onclick=async()=>{state.route.startMode='current';state.route.startLocationId='';routeStartPickerOpen=false;resetRouteProgress();await saveState();renderRouteCreate()};
+  document.getElementById('routeOtherStart').onclick=()=>{routeStartPickerOpen=!routeStartPickerOpen;renderRouteCreate()};
+  if(document.getElementById('routeOtherCancel'))document.getElementById('routeOtherCancel').onclick=()=>{routeStartPickerOpen=false;renderRouteCreate()};
+  if(document.getElementById('routeOtherApply'))document.getElementById('routeOtherApply').onclick=async()=>{const id=document.getElementById('routeOtherStartSelect')?.value;if(!id||!locationById(id))return;state.route.startMode='location';state.route.startLocationId=id;routeStartPickerOpen=false;resetRouteProgress();await saveState();renderRouteCreate()};
   document.getElementById('routeClear').onclick=async()=>{if(!confirm('Clear the current route?'))return;state.route.stops=[];resetRouteProgress();await saveState();renderRouteCreate()};
   document.getElementById('routeStartRun').onclick=async()=>{state.route.runIndex=0;await saveState();setRouteView('run')};
   const box=document.getElementById('routeOrder');
-  box.innerHTML=`<div class="route route-start-row"><b>START</b><span>${esc(routeStartLabel())}</span><span class="route-row-controls route-row-controls-empty"></span></div>`+(stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button><button class="route-remove" data-remove="${i}" aria-label="Remove stop">×</button></span></div>`).join(''):'<div class="route-empty">No destinations in this route yet.</div>');
+  box.innerHTML=stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button><button class="route-remove" data-remove="${i}" aria-label="Remove stop">×</button></span></div>`).join(''):'<div class="route-empty">No destinations in this route yet.</div>';
   box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));
   box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
   box.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{state.route.stops.splice(+b.dataset.remove,1);resetRouteProgress();await saveState();renderRouteCreate()});
