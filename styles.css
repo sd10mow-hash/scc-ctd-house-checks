@@ -513,3 +513,7 @@ a{color:var(--accent)}
 /* v1.4.4 encrypted work-email database transfer */
 .database-transfer-grid{margin-top:10px}
 .database-transfer-grid input[type="email"]{letter-spacing:.01em}
+
+/* v1.4.5 per-device reporter identity */
+.user-profile-setup{max-width:620px}
+.user-profile-setup .formgrid{margin-top:10px}

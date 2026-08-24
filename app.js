@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.4';
+const VERSION='1.4.5';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounselingcenter.org';
@@ -98,13 +98,16 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:7,
+    schemaVersion:8,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
     route:{stops:[],baseId:'base-home-office'},
     settings:{
-      driverName:'Steven Mowery',
+      reporterName:'',
+      reporterRole:'',
+      userWorkEmail:'',
+      profileComplete:false,
       organization:'Shawnee Counseling Center',
       reportTextLabel:'Report Recipient',
       reportTextNumber:'',
@@ -200,6 +203,8 @@ function normalizeState(raw){
   if(!d.route.baseId)d.route.baseId='base-home-office';
   const oldNum=s.settings?.reportTextNumber||s.settings?.transportNumber||'';
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
+  if(!d.settings.reporterName&&s.settings?.driverName)d.settings.reporterName=s.settings.driverName;
+  if(Number(s.schemaVersion||0)<8)d.settings.profileComplete=false;
   d.currentRun=s.currentRun&&s.currentRun.checks?{...s.currentRun,id:s.currentRun.id||uuid(),startedAt:s.currentRun.startedAt||new Date().toISOString()}:{id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   d.history=Array.isArray(s.history)?s.history:[];
   if(Number(s.schemaVersion||0)<5){
@@ -219,7 +224,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=7;
+  d.schemaVersion=8;
   return d;
 }
 function getCheck(pid,room){
@@ -313,12 +318,16 @@ async function decryptState(payload,k){
 }
 async function databaseExists(){return !!(await kvGet(META))}
 async function saveState(){if(state&&cryptoKey)await kvPut(DATA,await encryptState(state))}
-async function setupDatabase(pin,reportNumber){
+async function setupDatabase(pin,reportNumber,reporterName,reporterRole,userWorkEmail){
   const salt=crypto.getRandomValues(new Uint8Array(16));
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:7});
+  state.settings.reporterName=String(reporterName||'').trim();
+  state.settings.reporterRole=String(reporterRole||'').trim();
+  state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
+  state.settings.profileComplete=true;
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:8});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -395,6 +404,44 @@ async function refreshAppFiles(){
   location.replace(u.toString());
 }
 
+
+async function ensureUserProfile(){
+  if(state?.settings?.profileComplete && state.settings.reporterName && validWorkEmail(state.settings.userWorkEmail))return true;
+  return new Promise(resolve=>{
+    const s=state.settings||{};
+    const wrap=document.createElement('div');wrap.className='pin-overlay';
+    wrap.innerHTML=`<div class="pin-dialog user-profile-setup">
+      <div class="title">Who is using this phone?</div>
+      <div class="muted">This identifies the person completing the house-check report. The name will print as “Reported by” on the final report.</div>
+      <div class="formgrid">
+        <div class="field"><label>Your full name</label><input id="profileReporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}" placeholder="Full name"></div>
+        <div class="field"><label>Job title / role</label><input id="profileReporterRole" value="${esc(s.reporterRole||'')}" placeholder="Transporter"></div>
+        <div class="field"><label>Work email</label><input id="profileWorkEmail" type="email" autocomplete="email" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+      </div>
+      <div class="error" id="profileSetupError"></div>
+      <div class="actions"><button class="btn primary" id="saveUserProfile">Save User Profile</button></div>
+    </div>`;
+    document.body.appendChild(wrap);
+    const done=async()=>{
+      const name=wrap.querySelector('#profileReporterName').value.trim();
+      const role=wrap.querySelector('#profileReporterRole').value.trim();
+      const email=wrap.querySelector('#profileWorkEmail').value.trim().toLowerCase();
+      const err=wrap.querySelector('#profileSetupError');
+      if(!name){err.textContent='Enter your full name.';return}
+      if(!role){err.textContent='Enter your job title or role.';return}
+      if(!validWorkEmail(email)){err.textContent=`Use your @${WORK_EMAIL_DOMAIN} work email.`;return}
+      state.settings.reporterName=name;
+      state.settings.reporterRole=role;
+      state.settings.userWorkEmail=email;
+      state.settings.profileComplete=true;
+      await saveState();
+      wrap.remove();
+      resolve(true);
+    };
+    wrap.querySelector('#saveUserProfile').onclick=done;
+  });
+}
+
 /* ---------- Lock / Setup ---------- */
 async function showLock(){
   clearTimeout(autoLockTimer);
@@ -409,6 +456,9 @@ async function showLock(){
       <div class="field"><label>${exists?'PIN':'Create PIN'}</label><input id="pin" type="password" inputmode="numeric" minlength="4" required autocomplete="off"></div>
       ${exists?'':`
         <div class="field"><label>Confirm PIN</label><input id="pin2" type="password" inputmode="numeric" minlength="4" required autocomplete="off"></div>
+        <div class="field"><label>Your full name</label><input id="setupReporterName" autocomplete="name" placeholder="Full name" required></div>
+        <div class="field"><label>Job title / role</label><input id="setupReporterRole" placeholder="Transporter" required></div>
+        <div class="field"><label>Work email</label><input id="setupWorkEmail" type="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}" required></div>
         <div class="field"><label>Report Text Cell Number</label><input id="setupTextNumber" type="tel" inputmode="tel" placeholder="(555) 555-1212" required></div>
         <div class="setup-test"><button class="btn" id="setupTestText" type="button">Test Text Number</button><span class="muted">Opens a harmless test draft. It does not send automatically.</span></div>
       `}
@@ -433,11 +483,18 @@ async function showLock(){
     try{
       if(exists){
         await unlockDatabase(pin);
+        await ensureUserProfile();
       }else{
         if(pin!==document.getElementById('pin2').value){err.textContent='PINs do not match.';return}
+        const name=document.getElementById('setupReporterName').value.trim();
+        const role=document.getElementById('setupReporterRole').value.trim();
+        const email=document.getElementById('setupWorkEmail').value.trim().toLowerCase();
         const n=digits(document.getElementById('setupTextNumber').value);
+        if(!name){err.textContent='Enter your full name.';return}
+        if(!role){err.textContent='Enter your job title or role.';return}
+        if(!validWorkEmail(email)){err.textContent=`Use your @${WORK_EMAIL_DOMAIN} work email.`;return}
         if(n.length<10){err.textContent='Enter the report-text cell number.';return}
-        await setupDatabase(pin,n);
+        await setupDatabase(pin,n,name,role,email);
       }
       renderShell();
     }catch(ex){err.textContent='Could not open the secure database. '+(ex?.message||'Check the PIN.')}
@@ -959,7 +1016,8 @@ function currentSnapshot(completedAt=null){
     id:state.currentRun.id,
     startedAt:state.currentRun.startedAt,
     completedAt,
-    driverName:state.settings.driverName,
+    reporterName:state.settings.reporterName||state.settings.driverName||'Reporter',
+    reporterRole:state.settings.reporterRole||'',
     properties:deepClone(state.properties),
     checks:deepClone(state.currentRun.checks)
   };
@@ -1008,7 +1066,7 @@ function reportPaper(snapshot,id='reportPaper'){
   const colHead=`<div class="master-col-head"><span>Rm</span><span>Client Name</span><span>Cell Phone</span><span>Home</span><span>Not</span><span>Sleep</span><span>Pass</span><span>Notes</span></div>`;
   return `<div class="paper master-sheet" id="${id}">
     <div class="master-sheet-title">HOUSE CHECK RUN SHEET</div>
-    <div class="master-meta"><span><b>DATE / TIME:</b> ${esc(stamp.toLocaleString())}</span><span><b>DRIVER:</b> ${esc(snapshot.driverName||'Driver')}</span></div>
+    <div class="master-meta"><span><b>DATE / TIME:</b> ${esc(stamp.toLocaleString())}</span><span><b>REPORTED BY:</b> ${esc(snapshot.reporterName||snapshot.driverName||'Reporter')}</span></div>
     <div class="master-instruction">SEE THEM • VERIFY THE NAME • CHECK THE STATUS • LEAVE A USEFUL NOTE</div>
     <div class="master-columns">
       <div class="master-column">${colHead}${left.map(p=>masterHouseHtml(snapshot,p)).join('')}</div>
@@ -1080,7 +1138,7 @@ async function makeReportPng(snapshot){
   g.fillStyle='#111';g.textAlign='center';g.font='bold 28px Arial';g.fillText('HOUSE CHECK RUN SHEET',W/2,28);
   const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();
   g.textAlign='left';g.font='bold 15px Arial';g.fillText('DATE / TIME:',margin,62);g.font='15px Arial';g.fillText(stamp.toLocaleString(),margin+115,62);
-  g.textAlign='right';g.font='bold 15px Arial';g.fillText(`DRIVER: ${snapshot.driverName||'Driver'}`,W-margin,62);
+  g.textAlign='right';g.font='bold 15px Arial';g.fillText(`REPORTED BY: ${snapshot.reporterName||snapshot.driverName||'Reporter'}`,W-margin,62);
   g.textAlign='center';g.font='bold 14px Arial';g.fillText('SEE THEM • VERIFY THE NAME • CHECK THE STATUS • LEAVE A USEFUL NOTE',W/2,92);
 
   const labels=['Rm','Client Name','Cell Phone','Home','Not','Sleep','Pass','Notes'];
@@ -1227,13 +1285,16 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:7,
+    schemaVersion:8,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
     locations:state.locations,
     route:state.route,
-    settings:state.settings
+    settings:{
+      organization:state.settings.organization,
+      reportTextLabel:state.settings.reportTextLabel
+    }
   };
 }
 function validWorkEmail(email){
@@ -1286,12 +1347,18 @@ async function openPortableBackup(file,password){
 }
 async function importDatabasePayload(incoming){
   const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
+  const localIdentity={
+    reporterName:state.settings.reporterName||state.settings.driverName||'',
+    reporterRole:state.settings.reporterRole||'',
+    userWorkEmail:state.settings.userWorkEmail||'',
+    profileComplete:!!state.settings.profileComplete
+  };
   state.properties=incoming.properties.map(normalizeProperty);
   state.inactiveClients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map(normalizeInactiveClient):keepInactive;
   state.locations=Array.isArray(incoming.locations)?incoming.locations:[];
   state.route=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
   const incomingSettings=incoming.settings||{};
-  state.settings={...state.settings,...incomingSettings,reportTextLabel:incomingSettings.reportTextLabel||incomingSettings.transportLabel||state.settings.reportTextLabel,reportTextNumber:keepText||incomingSettings.reportTextNumber||incomingSettings.transportNumber||''};
+  state.settings={...state.settings,...incomingSettings,...localIdentity,reportTextLabel:incomingSettings.reportTextLabel||incomingSettings.transportLabel||state.settings.reportTextLabel,reportTextNumber:keepText||incomingSettings.reportTextNumber||incomingSettings.transportNumber||''};
   state.currentRun={id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   await saveState();
 }
@@ -1398,7 +1465,9 @@ function renderSettings(){
   const s=state.settings,view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="title">Setup & Settings</div><div class="muted">The report-text cell number is intentionally editable so you can test with your own phone before switching to the real recipient.</div></section>
   <section class="panel"><div class="formgrid">
-    <div class="field"><label>Driver name</label><input id="driverName" value="${esc(s.driverName)}"></div>
+    <div class="field"><label>Your full name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
+    <div class="field"><label>Job title / role</label><input id="reporterRole" value="${esc(s.reporterRole||'')}"></div>
+    <div class="field"><label>Work email</label><input id="userWorkEmail" type="email" autocomplete="email" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
     <div class="field"><label>Organization</label><input id="organization" value="${esc(s.organization)}"></div>
     <div class="field"><label>Report recipient label</label><input id="reportLabel" value="${esc(s.reportTextLabel)}"></div>
     <div class="field"><label>Report Text Cell Number</label><input id="reportNumber" type="tel" inputmode="tel" value="${esc(fmtPhone(s.reportTextNumber))}"></div>
@@ -1406,7 +1475,11 @@ function renderSettings(){
   </div><div class="actions"><button class="btn" id="testText">Test Text</button><button class="btn primary" id="saveSettings">Save Settings</button><button class="btn" id="lockNow">Lock Now</button></div><div class="notice">Test Text opens Messages with a harmless draft to the configured number. The app never silently sends it.</div></section>`;
   document.getElementById('testText').onclick=()=>{const n=digits(document.getElementById('reportNumber').value);if(n.length<10){alert('Enter a valid report-text cell number first.');return}openSms(n,'SCC-CTD House Checks TEST: report texting is configured correctly.')};
   document.getElementById('saveSettings').onclick=async()=>{
-    s.driverName=document.getElementById('driverName').value.trim()||'Driver';s.organization=document.getElementById('organization').value.trim()||'Organization';
+    const reporterName=document.getElementById('reporterName').value.trim(),reporterRole=document.getElementById('reporterRole').value.trim(),userWorkEmail=document.getElementById('userWorkEmail').value.trim().toLowerCase();
+    if(!reporterName){alert('Enter your full name.');return}
+    if(!reporterRole){alert('Enter your job title or role.');return}
+    if(!validWorkEmail(userWorkEmail)){alert(`Use your @${WORK_EMAIL_DOMAIN} work email.`);return}
+    s.reporterName=reporterName;s.reporterRole=reporterRole;s.userWorkEmail=userWorkEmail;s.profileComplete=true;s.organization=document.getElementById('organization').value.trim()||'Organization';
     s.reportTextLabel=document.getElementById('reportLabel').value.trim()||'Report Recipient';s.reportTextNumber=digits(document.getElementById('reportNumber').value);
     s.autoLockMinutes=Math.max(1,Math.min(120,+document.getElementById('autoLock').value||15));await saveState();bumpLock();alert('Settings saved.');
   };
