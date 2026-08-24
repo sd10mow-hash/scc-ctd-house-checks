@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.7';
+const VERSION='1.5.8';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -100,7 +100,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:20,
+    schemaVersion:21,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -248,7 +248,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=20;
+  d.schemaVersion=21;
   return d;
 }
 function getCheck(pid,room){
@@ -351,7 +351,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:20});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:21});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -789,7 +789,7 @@ function inspectionHouseListHtml(){
         </section>`;
 
   return `<section class="panel inspection-current">
-    <div class="titlebar"><div><div class="title">Inspection In Progress</div><div class="muted">${inspectionDateLabel(activeInspectionDate()||inspectionTodayKey())} • Started ${state.currentRun.startedAt?new Date(state.currentRun.startedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}</div></div>${nameRevealButton()}</div>
+    <div class="titlebar"><div><div class="title">Inspection In Progress</div><div class="muted">${inspectionDateLabel(activeInspectionDate()||inspectionTodayKey())} • Started ${state.currentRun.startedAt?new Date(state.currentRun.startedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}</div></div></div>
     <div class="kpirow">
       <div class="kpi"><strong>${T.checked}</strong>Checked</div>
       <div class="kpi"><strong>${T.missing}</strong>Unresolved</div>
@@ -803,15 +803,13 @@ function inspectionHouseListHtml(){
     return `<article class="card ${houseClass(p)}">
       <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3>${propertySituationCardHtml(p)}
       <div class="houseflag">${
-        !propertyNeedsChecks(p)
-          ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
-          : g.missing>0
-            ? `<span class="required">● CHECKS REQUIRED</span>`
-            : `<span class="complete">● COMPLETE</span>`
+        g.missing>0
+          ? `<span class="required">● CHECKS REQUIRED</span>`
+          : `<span class="complete">● COMPLETE</span>`
       }</div>
-      <div class="meta">${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} required checked`} • ${open} open • ${noBed} no bed</div>
+      <div class="meta">${p.beds} beds • ${g.total?`${g.done}/${g.total} required checked`:'0 required checks • complete'} • ${open} open • ${noBed} no bed</div>
       <div class="progress"><span style="width:${g.pct}%"></span></div>
-      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</div>
+      <div class="actions"><button class="btn ${g.missing>0?'primary':''}" data-open="${esc(p.id)}">${g.total?'Open House':'View House'}</button><span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span></div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet.</div></div>'}</section>
   ${finalControls}`;
@@ -1155,11 +1153,9 @@ function renderHouse(){
   const g=progress(p),view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="househead">
     <div><div class="actions"><button class="btn" id="backHouses">← Previous</button>${nameRevealButton()}</div><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${
-      !propertyNeedsChecks(p)
-        ? '<span class="notrequired">NO REQUIRED CLIENTS</span>'
-        : g.missing>0
-          ? '<span class="required">CHECKS REQUIRED</span>'
-          : '<span class="complete">COMPLETE</span>'
+      g.missing>0
+        ? '<span class="required">CHECKS REQUIRED</span>'
+        : '<span class="complete">COMPLETE</span>'
     }</div><div class="muted">${p.beds} beds ${p.checkRequired!==false?`• ${g.done}/${g.total} checked`:''}</div></div>
     <div class="codebox"><b>Door code:</b> ${revealCode?esc(p.doorCode||'Not entered'):'••••••'} <button class="btn" id="toggleCode">${revealCode?'Hide':'Reveal'}</button></div>
   </div></section>
@@ -1612,7 +1608,6 @@ function masterHouseHtml(snapshot,p){
     return `<div class="master-row ${r.type==='open'?'row-open':r.type==='nobed'?'row-nobed':''}">
       <span class="cell roomcell">${esc(r.room)}</span>
       <span class="cell clientcell${nameClass}">${r.type==='client'?esc(displayClientName(r.name)):esc(r.type==='open'?'OPEN / EMPTY':'NO BED')}</span>
-      <span class="cell phonecell">${r.type==='client'&&r.phone?esc(fmtPhone(r.phone)):''}</span>
       <span class="cell checkboxcell">${m.home?'☒':'☐'}</span>
       <span class="cell checkboxcell">${m.not?'☒':'☐'}</span>
       <span class="cell checkboxcell">${m.sleep?'☒':'☐'}</span>
@@ -1623,7 +1618,7 @@ function masterHouseHtml(snapshot,p){
 }
 function reportPaper(snapshot,id='reportPaper'){
   const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date(),props=[...snapshot.properties].sort(compareProperties),split=Math.ceil(props.length/2),left=props.slice(0,split),right=props.slice(split);
-  const colHead=`<div class="master-col-head"><span>Rm</span><span>Client Name</span><span>Cell Phone</span><span>Home</span><span>Not</span><span>Sleep</span><span>Pass</span><span>Notes</span></div>`;
+  const colHead=`<div class="master-col-head"><span>Rm</span><span>Client Name</span><span>Home</span><span>Not</span><span>Sleep</span><span>Pass</span><span>Notes</span></div>`;
   return `<div class="paper master-sheet" id="${id}">
     <div class="master-sheet-title">HOUSE CHECK RUN SHEET</div>
     <div class="master-meta"><span><b>DATE / TIME:</b> ${esc(stamp.toLocaleString())}</span><span><b>REPORTED BY:</b> ${esc(snapshot.reporterName||snapshot.driverName||'Reporter')}</span></div>
@@ -1667,7 +1662,7 @@ function renderReport(){
 }
 async function makeReportPng(snapshot){
   const W=2200,margin=32,gap=24,half=(W-margin*2-gap)/2;
-  const widths=[48,224,150,58,58,58,58,half-(48+224+150+58*4)];
+  const widths=[48,300,62,62,62,62,half-(48+300+62*4)];
   const xPos=widths.reduce((a,w)=>{a.push(a[a.length-1]+w);return a},[0]);
   const measure=document.createElement('canvas').getContext('2d');
   const wrap=(text,maxWidth,font='13px Arial')=>{measure.font=font;const words=String(text||'').split(/\s+/).filter(Boolean),lines=[];let line='';for(const w of words){const t=line?line+' '+w:w;if(measure.measureText(t).width>maxWidth&&line){lines.push(line);line=w}else line=t}if(line)lines.push(line);return lines};
@@ -1675,7 +1670,7 @@ async function makeReportPng(snapshot){
   const model=cols.map(col=>col.map(p=>{
     const rows=p.rooms.map(r=>{
       const status=statusFor(snapshot,p,r),marks=reportMarks(status),notes=reportNotes(snapshot,p,r);
-      const noteLines=notes.flatMap(n=>wrap(n,widths[7]-12,'13px Arial'));
+      const noteLines=notes.flatMap(n=>wrap(n,widths[6]-12,'13px Arial'));
       const rowH=Math.max(34,18+Math.max(1,noteLines.length)*17);
       return {r,status,marks,noteLines,rowH};
     });
@@ -1692,14 +1687,14 @@ async function makeReportPng(snapshot){
   g.textAlign='right';g.font='bold 15px Arial';g.fillText(`REPORTED BY: ${snapshot.reporterName||snapshot.driverName||'Reporter'}`,W-margin,62);
   g.textAlign='center';g.font='bold 14px Arial';g.fillText('SEE THEM • VERIFY THE NAME • CHECK THE STATUS • LEAVE A USEFUL NOTE',W/2,92);
 
-  const labels=['Rm','Client Name','Cell Phone','Home','Not','Sleep','Pass','Notes'];
+  const labels=['Rm','Client Name','Home','Not','Sleep','Pass','Notes'];
   const propertyFill=p=>({yellow:'#f3d96f',gray:'#c6cbd0',darkgray:'#7e878d',rose:'#e8aaaa'}[propertySituationColor(p)]||'#d7e7f4');
   const drawCell=(x,y,w,h,fill='#fff')=>{g.fillStyle=fill;g.fillRect(x,y,w,h);g.strokeStyle='#666';g.lineWidth=1;g.strokeRect(x,y,w,h)};
   const drawCheck=(cx,cy,on)=>{g.strokeStyle='#222';g.lineWidth=1.5;g.strokeRect(cx-8,cy-8,16,16);if(on){g.beginPath();g.moveTo(cx-5,cy);g.lineTo(cx-1,cy+5);g.lineTo(cx+6,cy-6);g.stroke()}};
 
   model.forEach((col,ci)=>{
     const baseX=margin+ci*(half+gap);let y=headerH;
-    for(let i=0;i<8;i++){drawCell(baseX+xPos[i],y,widths[i],colHeadH,'#f0f0f0');g.fillStyle='#111';g.font='bold 11px Arial';g.textAlign='center';g.fillText(labels[i],baseX+xPos[i]+widths[i]/2,y+colHeadH/2)}
+    for(let i=0;i<7;i++){drawCell(baseX+xPos[i],y,widths[i],colHeadH,'#f0f0f0');g.fillStyle='#111';g.font='bold 11px Arial';g.textAlign='center';g.fillText(labels[i],baseX+xPos[i]+widths[i]/2,y+colHeadH/2)}
     y+=colHeadH;
     for(const h of col){
       drawCell(baseX,y,half,30,propertyFill(h.p));g.fillStyle='#111';g.textAlign='left';g.font='bold 13px Arial';g.fillText(h.p.address,baseX+7,y+15);
@@ -1708,14 +1703,13 @@ async function makeReportPng(snapshot){
       for(const row of h.rows){
         const r=row.r;
         let baseFill='#fff';if(r.type==='open')baseFill='#fff4a6';else if(r.type==='nobed')baseFill='#e46a61';
-        for(let i=0;i<8;i++)drawCell(baseX+xPos[i],y,widths[i],row.rowH,baseFill);
+        for(let i=0;i<7;i++)drawCell(baseX+xPos[i],y,widths[i],row.rowH,baseFill);
         if(r.type==='client'&&r.color==='green'){g.fillStyle='#cdebe3';g.fillRect(baseX+xPos[1],y,widths[1],row.rowH);g.strokeStyle='#666';g.strokeRect(baseX+xPos[1],y,widths[1],row.rowH)}
         if(r.type==='client'&&r.color==='gray'){g.fillStyle='#ddd';g.fillRect(baseX+xPos[1],y,widths[1],row.rowH);g.strokeStyle='#666';g.strokeRect(baseX+xPos[1],y,widths[1],row.rowH)}
         g.fillStyle='#111';g.font='13px Arial';g.textAlign='center';g.fillText(r.room,baseX+xPos[0]+widths[0]/2,y+17);
         g.textAlign='left';g.fillText(r.type==='client'?maskClientName(r.name):(r.type==='open'?'OPEN / EMPTY':'NO BED'),baseX+xPos[1]+6,y+17);
-        if(r.type==='client'&&r.phone){g.font='11px Arial';g.fillText(fmtPhone(r.phone),baseX+xPos[2]+5,y+17)}
-        if(r.type==='client'){const arr=[row.marks.home,row.marks.not,row.marks.sleep,row.marks.pass];for(let k=0;k<4;k++)drawCheck(baseX+xPos[3+k]+widths[3+k]/2,y+17,arr[k])}
-        g.font='12px Arial';g.textAlign='left';row.noteLines.forEach((line,li)=>g.fillText(line,baseX+xPos[7]+5,y+13+li*17));
+        if(r.type==='client'){const arr=[row.marks.home,row.marks.not,row.marks.sleep,row.marks.pass];for(let k=0;k<4;k++)drawCheck(baseX+xPos[2+k]+widths[2+k]/2,y+17,arr[k])}
+        g.font='12px Arial';g.textAlign='left';row.noteLines.forEach((line,li)=>g.fillText(line,baseX+xPos[6]+5,y+13+li*17));
         y+=row.rowH;
       }
       y+=6;
@@ -1742,19 +1736,31 @@ async function downloadSnapshot(snapshot){const b=await makeReportPng(snapshot),
 function openSms(number,body){const n=digits(number);if(!n)return;location.href=`sms:${n}?body=${encodeURIComponent(body)}`}
 function reportMessage(snapshot){const T=totalsFor(snapshot.properties,snapshot.checks),when=snapshot.completedAt?new Date(snapshot.completedAt).toLocaleString():new Date().toLocaleString();return `SCC-CTD House Check Report ${when}. ${T.checked}/${T.required} required client checks recorded; ${T.missing} unresolved; ${T.notRequired} clients marked not required. Report image prepared.`}
 async function textSnapshot(snapshot){
-  const n=digits(state.settings.reportTextNumber);if(n.length<10){alert('Set the Report Text Cell Number in Settings first.');screen='settings';render();return}
-  const b=await makeReportPng(snapshot),f=new File([b],reportFilename(snapshot),{type:'image/png'}),msg=reportMessage(snapshot);
+  const n=digits(state.settings.reportTextNumber);if(n.length<10){alert('Set the Report Text Cell Number in Settings first.');screen='settings';settingsView='profile';render();return}
+  const b=await makeReportPng(snapshot),f=new File([b],reportFilename(snapshot),{type:'image/png'});
   try{
-    if(navigator.canShare&&navigator.share&&navigator.canShare({files:[f]})){
-      if(confirm(`Share the report image now? Choose Messages and send it to ${fmtPhone(n)}. Cancel opens a text draft to that number instead.`)){await navigator.share({title:'House Check Report',text:`Recipient: ${fmtPhone(n)}\n${msg}`,files:[f]});return}
+    if(navigator.share&&(!navigator.canShare||navigator.canShare({files:[f]}))){
+      await navigator.share({title:'House Check Report Image',text:`Send this report image to ${fmtPhone(n)}.`,files:[f]});
+      return;
     }
-  }catch{}
-  openSms(n,msg+' Attach the saved report image if needed.');
+  }catch(e){
+    if(e?.name==='AbortError')return;
+  }
+  await downloadSnapshot(snapshot);
+  alert(`This phone/browser could not attach the PNG automatically. The actual report image was saved. Attach ${reportFilename(snapshot)} to your message to ${fmtPhone(n)}.`);
 }
 async function emailSnapshot(snapshot){
-  const b=await makeReportPng(snapshot),f=new File([b],reportFilename(snapshot),{type:'image/png'}),msg=reportMessage(snapshot);
-  try{if(navigator.canShare&&navigator.share&&navigator.canShare({files:[f]})){await navigator.share({title:'House Check Report',text:msg,files:[f]});return}}catch{}
-  await downloadSnapshot(snapshot);location.href=`mailto:?subject=${encodeURIComponent('House Check Report')}&body=${encodeURIComponent(msg+' Report image saved for attachment.')}`;
+  const b=await makeReportPng(snapshot),f=new File([b],reportFilename(snapshot),{type:'image/png'});
+  try{
+    if(navigator.share&&(!navigator.canShare||navigator.canShare({files:[f]}))){
+      await navigator.share({title:'House Check Report Image',text:'SCC-CTD House Check final report image.',files:[f]});
+      return;
+    }
+  }catch(e){
+    if(e?.name==='AbortError')return;
+  }
+  await downloadSnapshot(snapshot);
+  alert(`This phone/browser could not attach the PNG automatically. The actual report image was saved as ${reportFilename(snapshot)} so it can be attached to email.`);
 }
 async function completeRun(){
   return lockFinalInspectionReport();
@@ -1846,7 +1852,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:20,
+    schemaVersion:21,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,

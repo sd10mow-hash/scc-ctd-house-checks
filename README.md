@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.5.7
+# SCC-CTD House Checks v1.5.8
 
 GitHub-ready public PWA build.
 
-## v1.5.7 changes
+## v1.5.8 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.5.7 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.5.8 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -182,7 +182,7 @@ V1.5.6 CLEAN SETTINGS HUB
 - Release Database opens its own encrypted database-release interface.
 - Load Database opens a dedicated large file picker and now exposes the encrypted .sccbackup importer from Settings.
 - This fixes the navigation dead-end created when Database was removed from the main screen.
-- The previously emailed Clean Inspection State .sccbackup is compatible with v1.5.7.
+- The previously emailed Clean Inspection State .sccbackup is compatible with v1.5.8.
 - Load Database accepts the .sccbackup extension plus broad iPhone file-picker MIME fallbacks.
 - Successful imports return to Settings; errors remain visible instead of silently failing.
 - Save explicitly writes the current encrypted state to this device.
@@ -201,3 +201,16 @@ V1.5.7 STRICT FINAL REPORT WORKFLOW
 - Locking creates the immutable historical snapshot, ends the active inspection, and opens the locked report.
 - Locked historical reports retain PIN-protected Print, Text, and Email actions.
 - Calendar dates containing a locked final report retain the pink report identity and now receive a soft blue halo around the entire day cell.
+
+
+V1.5.8 HOUSE COMPLETION + IMAGE REPORT CLEANUP
+- Removed Show Full Names from the active house-listing screen.
+- Houses with zero mandatory client checks now display COMPLETE and a bright green 100% progress ring.
+- Zero-required houses are intentionally treated as complete by the final-report gate; their appearance now matches that logic.
+- Individual zero-required house headers also display COMPLETE.
+- Removed Cell Phone from the final report on-screen layout.
+- Removed Cell Phone from the generated PNG layout.
+- Rebalanced the report grid so Client Name and Notes receive the recovered space.
+- Report delivery is now image-first: Text and Email use the actual PNG file through the system share sheet.
+- The app no longer silently falls back to a text-only SMS/email when file sharing is unavailable.
+- When attachment sharing is unavailable, the actual PNG is saved and the user is explicitly told to attach that image.
