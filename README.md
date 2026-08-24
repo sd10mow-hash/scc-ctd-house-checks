@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.5.0
+# SCC-CTD House Checks v1.5.2
 
 GitHub-ready public PWA build.
 
-## v1.5.0 changes
+## v1.5.2 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.5.0 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.5.2 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -108,3 +108,26 @@ V1.5.0 WORK EMAIL VALIDATION FIX
 - The app now normalizes whitespace and case, then validates one definitive rule: the address must contain one @ and end EXACTLY in @shawneecounseling.org.
 - Work Email and Confirm Work Email are compared after normalization.
 - The correct approved domain is shown directly under the Work Email label.
+
+
+V1.5.1 CLEAN MAIN SCREEN / MODULE SHELL
+- After login, the app now opens to a dedicated Main Screen instead of automatically rendering Tonight below the menu.
+- The Main Screen contains ONLY the module buttons, plus the persistent top Lock control.
+- Module button order:
+  Row 1: Tonight | Route | Client Search
+  Row 2: Report | Lock Codes | History
+  Row 3: Properties | Locations | Database
+  Row 4: Settings
+- Selecting a module removes the full button grid and opens only that module.
+- Every module gets one navigation control: ← Main Screen.
+- Returning to Main Screen clears temporary module state, temporary full-name reveals, and lock-code authorization.
+- This build intentionally changes only the navigation shell. Individual modules are NOT declared repaired yet; they will be reviewed one at a time.
+
+
+V1.5.2 SIX-DOOR MAIN SCREEN
+- Main screen is now six large full-width module buttons centered in the usable phone viewport.
+- Order: INSPECTIONS, REPORTS, ROUTE PLANNER, CLIENT • SECURE, PROPERTIES, SETTINGS.
+- Each button has a visual icon and a subtle right chevron.
+- Main menu stretches vertically to use the available screen without rendering module content underneath.
+- Responsive height rules keep all six controls usable on shorter iPhone screens.
+- Hidden/support functions remain available inside the existing code but are no longer exposed as main-screen buttons; module-by-module consolidation will follow.

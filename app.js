@@ -1,13 +1,13 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.0';
+const VERSION='1.5.2';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
 const STORE='kv', META='meta', DATA='data';
 const ENC=new TextEncoder(), DEC=new TextDecoder();
-let cryptoKey=null,state=null,screen='tonight',activePropertyId=null,editPropertyId=null,editLocationId=null;
+let cryptoKey=null,state=null,screen='home',activePropertyId=null,editPropertyId=null,editLocationId=null;
 let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
 let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
@@ -98,7 +98,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:13,
+    schemaVersion:15,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -225,7 +225,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=13;
+  d.schemaVersion=15;
   return d;
 }
 function getCheck(pid,room){
@@ -328,7 +328,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:13});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:15});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -365,6 +365,7 @@ async function quickLock(){
   hideFullNames();
   cryptoKey=null;
   state=null;
+  screen='home';
   activePropertyId=null;
   editPropertyId=null;
   editLocationId=null;
@@ -553,38 +554,86 @@ async function showLock(){
 }
 
 /* ---------- Shell / navigation ---------- */
+const MAIN_MENU_ROWS=[
+  [['tonight','📋','INSPECTIONS']],
+  [['report','📄','REPORTS']],
+  [['route','📍','ROUTE PLANNER']],
+  [['search','🔒','CLIENT • SECURE']],
+  [['properties','🏠','PROPERTIES']],
+  [['settings','⚙️','SETTINGS']]
+]
+
+function resetModuleState(){
+  hideFullNames();
+  codesUnlocked=false;
+  activePropertyId=null;
+  editPropertyId=null;
+  editLocationId=null;
+  reportApproved=false;
+  historyOpenId=null;
+  revealCode=false;
+}
+
 function renderShell(){
   bumpLock();
+  screen='home';
+  resetModuleState();
   APP.innerHTML=`<div class="shell">
     <div class="top">
       <div class="topline">
-        <div class="brandrow"><img class="appmark" src="icon-192.png" alt=""><div><div class="brand">SCC-CTD • House Checks <span class="version">v${VERSION}</span></div><div class="sub">Encrypted internal database • complete reports • local history</div></div></div>
+        <div class="brandrow"><img class="appmark" src="icon-192.png" alt=""><div><div class="brand">SHAWNEE COUNSELING CENTER <span class="version">v${VERSION}</span></div><div class="sub">TRANSPORTATION • SCC-CTD HOUSE CHECKS</div></div></div>
         <button class="quick-lock" id="quickLock" type="button" aria-label="Lock House Checks now">🔒 Lock</button>
       </div>
       <div class="nav" id="nav"></div>
     </div>
-    <div id="view"></div>
-    <div class="footer">Client names and door codes live in the encrypted internal database on this device. The hosted app package itself contains no private roster. <span class="version">v${VERSION}</span></div>
+    <main id="view"></main>
   </div>`;
   document.getElementById('quickLock').onclick=quickLock;
   render();
 }
+
+function goHome(){
+  resetModuleState();
+  screen='home';
+  render();
+}
+
 function drawNav(){
   const nav=document.getElementById('nav');
-  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
-  nav.innerHTML=items.map(([k,l])=>`<button data-nav="${k}" class="${screen===k?'active':''}">${l}</button>`).join('');
-  nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{
-    hideFullNames();
-    const next=b.dataset.nav;
-    if(next==='codes'){
-      if(!await requestPin('view the full lock-code list'))return;
-      codesUnlocked=true;
-    }else codesUnlocked=false;
-    screen=next;activePropertyId=editPropertyId=editLocationId=null;reportApproved=false;historyOpenId=null;render();
-  });
+  if(screen==='home'){
+    nav.className='nav home-menu';
+    nav.innerHTML=MAIN_MENU_ROWS.map((row,rowIndex)=>`
+      <div class="home-menu-row home-menu-row-${rowIndex+1}">
+        ${row.map(([k,icon,label])=>`<button data-nav="${k}" class="home-module-button"><span class="home-module-icon" aria-hidden="true">${icon}</span><span class="home-module-label">${label}</span></button>`).join('')}
+      </div>
+    `).join('');
+    nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{
+      const next=b.dataset.nav;
+      resetModuleState();
+      if(next==='codes'){
+        if(!await requestPin('view the full lock-code list'))return;
+        codesUnlocked=true;
+      }
+      screen=next;
+      render();
+    });
+    return;
+  }
+
+  nav.className='nav module-nav';
+  nav.innerHTML=`<button class="module-home-button" id="moduleHome">← Main Screen</button>`;
+  document.getElementById('moduleHome').onclick=goHome;
 }
+
 function render(){
   drawNav();
+  const view=document.getElementById('view');
+
+  if(screen==='home'){
+    view.innerHTML='';
+    return;
+  }
+
   if(activePropertyId)return renderHouse();
   if(screen==='search')return renderClientSearch();
   if(screen==='route')return renderRoute();
@@ -595,7 +644,9 @@ function render(){
   if(screen==='locations')return renderLocations();
   if(screen==='database')return renderDatabase();
   if(screen==='settings')return renderSettings();
-  renderTonight();
+  if(screen==='tonight')return renderTonight();
+
+  goHome();
 }
 
 /* ---------- Tonight ---------- */
@@ -1367,7 +1418,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:13,
+    schemaVersion:15,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
