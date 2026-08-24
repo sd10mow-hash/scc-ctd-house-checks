@@ -1,18 +1,17 @@
-# SCC-CTD House Checks v1.6.7
+# SCC-CTD House Checks v1.6.10
 
 GitHub-ready public PWA build.
 
-## v1.6.7 multi-stop Google Maps sections + closed route loop
+## v1.6.10 route handoff simplification
 
-- Sends the planned loop to Google Maps in ordered multi-stop sections instead of one house at a time.
-- Up to 10 destinations ride in one native Google Maps section; larger routes continue in the next section.
-- The final section returns to the exact saved starting location.
-- Replaces the vague "Batch Complete" control with "Finished These Stops • Continue Route".
-- Route-in-progress shows the exact stops included in the next Google Maps section.
-- After finishing that section, **Finished These Stops • Continue Route** advances to the remaining addresses.
-- The final section includes the return to the route's captured starting point.
-- On iPhone, the handoff uses Google's `comgooglemapsurl://` scheme so an ordered multi-stop Maps URL opens in the installed Google Maps app, with a universal Maps URL fallback.
-- Maps URLs request driving navigation with `dir_action=navigate`.
+- Removes the in-app route-progress tracker entirely.
+- No Arrived / Next Stop button, no Coming Up tracker, and no per-house driver checkoff.
+- Plan Route remains the route workspace and preserves manual arrow ordering.
+- Google Maps receives the actual ordered route section, including intermediate waypoints.
+- Routes larger than Google Maps can safely accept in one handoff are split into clearly labeled Google Maps Part buttons.
+- A 13-house route is normally two Google Maps launches rather than one launch per house.
+- The final Google Maps part returns to the route's original starting location.
+- Current Position is captured only when needed so the final section can return to the same starting coordinates.
 - Database schema remains 25. No roster/client/property migration.
 
 ## v1.6.1 changes

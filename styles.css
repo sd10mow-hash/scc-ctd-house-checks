@@ -1381,3 +1381,9 @@ a{color:var(--accent)}
 .route-return-leg{color:#8df5a8}.route-return-leg b{color:#8df5a8!important}
 .route-plan-actions .route-start-route{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center}
 .route-plan-actions .route-start-route small{display:block;font-size:11px;font-weight:750;line-height:1.2;opacity:.72}
+
+/* v1.6.10 Secure Client quick navigation */
+.client-location-line{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.client-address-link{color:var(--green);font-weight:850;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;cursor:pointer}
+.client-address-link:active{opacity:.72}
+.profile-grid .client-address-link{display:block;white-space:normal}

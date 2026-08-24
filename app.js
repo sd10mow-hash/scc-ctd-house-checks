@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.8';
+const VERSION='1.6.10';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1169,7 +1169,7 @@ function showClientProfile(p,r){
   wrap.innerHTML=`<div class="pin-dialog client-profile-dialog">
     <div class="title">Client Record • ${esc(String(r.name||''))}</div>
     <div class="profile-grid">
-      <div><b>Address</b><span>${esc(p.address)}</span></div>
+      <div><b>Address</b><a class="client-address-link" id="clientProfileMap" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(p.address)}&travelmode=driving&dir_action=navigate">📍 ${esc(p.address)}</a></div>
       <div><b>Room</b><span>${esc(r.room)}</span></div>
       <div><b>Phone</b><span>${r.phone?esc(fmtPhone(r.phone)):'Not entered'}</span></div>
       <div><b>House Inspection</b><span class="${r.checkRequired!==false?'profile-required':'profile-notrequired'}">${r.checkRequired!==false?'REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</span></div>
@@ -1181,6 +1181,7 @@ function showClientProfile(p,r){
     <div class="actions"><button class="btn primary" id="closeClientProfile">Close</button></div>
   </div>`;
   document.body.appendChild(wrap);
+  wrap.querySelector('#clientProfileMap').onclick=e=>{e.preventDefault();openClientAddressGoogleMaps(p.address)};
   wrap.querySelector('#closeClientProfile').onclick=()=>wrap.remove();
   wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};
 }
@@ -1451,15 +1452,14 @@ function renderClientSearch(){
         ? results.map((x,i)=>`<article class="card search-result client-search-card">
             <div class="client-search-main">
               <div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
-              <div class="meta">${x.kind==='active'
-                ? `${esc(x.property.address)} • Room ${esc(x.record.room)}`
+              <div class="meta client-location-line">${x.kind==='active'
+                ? `<a class="client-address-link" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(x.property.address)}&travelmode=driving&dir_action=navigate" data-clientnav="${i}">📍 ${esc(x.property.address)}</a><span> • Room ${esc(x.record.room)}</span>`
                 : `INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}${x.record.previousRoom?` • Room ${esc(x.record.previousRoom)}`:''}`}</div>
               <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div>
             </div>
             <div class="actions client-search-actions">
               <button class="btn" data-viewclient="${i}">View Client</button>
               <button class="btn primary" data-editclient="${i}">Edit Client</button>
-              ${x.kind==='active'?`<button class="btn" data-findhouse="${esc(x.property.id)}">Open House</button>`:''}
             </div>
           </article>`).join('')
         : '<div class="panel"><div class="muted">No matching client found.</div></div>'
@@ -1489,12 +1489,10 @@ function renderClientSearch(){
     if(x)editClientProfile(x);
   });
 
-  view.querySelectorAll('[data-findhouse]').forEach(b=>b.onclick=()=>{
-    hideFullNames();
-    activePropertyId=b.dataset.findhouse;
-    revealCode=false;
-    screen='inspections';
-    render();
+  view.querySelectorAll('[data-clientnav]').forEach(a=>a.onclick=e=>{
+    e.preventDefault();
+    const x=results[+a.dataset.clientnav];
+    if(x?.kind==='active'&&x.property?.address)openClientAddressGoogleMaps(x.property.address);
   });
 }
 /* ---------- Locations + Route ---------- */
@@ -1738,6 +1736,22 @@ function routeGoogleSections(startAddress){
     }
   }
   return sections;
+}
+function openClientAddressGoogleMaps(destination){
+  if(!destination)return;
+  const params=new URLSearchParams({api:'1',destination,travelmode:'driving',dir_action:'navigate'});
+  const webUrl=`https://www.google.com/maps/dir/?${params.toString()}`;
+  const appUrl=routeGoogleAppUrl(webUrl);
+  const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
+  if(ios){
+    const started=Date.now();
+    window.location.href=appUrl;
+    setTimeout(()=>{
+      if(document.visibilityState==='visible'&&Date.now()-started<2500)window.location.href=webUrl;
+    },1100);
+    return;
+  }
+  window.location.href=webUrl;
 }
 function routeGoogleWebUrl(origin,destination,waypoints=[]){
   const params=new URLSearchParams({api:'1',origin,destination,travelmode:'driving',dir_action:'navigate'});
