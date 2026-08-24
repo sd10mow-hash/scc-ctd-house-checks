@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.7';
+const VERSION='1.6.8';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1697,33 +1697,117 @@ async function prepareRouteLoopStart(){
     return false;
   }
 }
-function routeLoopPoints(){
-  const points=validRouteStops().map((s,i)=>({label:stopLabel(s),address:stopAddress(s),stopNumber:i+1,isReturn:false}));
-  if(state.route.runStartAddress)points.push({label:`Return to ${state.route.runStartLabel||'Starting Location'}`,address:state.route.runStartAddress,stopNumber:0,isReturn:true});
-  return points;
+function routeNavigationPlan(){
+  const total=validRouteStops().length,parts=[];
+  if(!total)return parts;
+  let cursor=0;
+  while(total-cursor>9){
+    const end=Math.min(cursor+10,total);
+    parts.push({startIndex:cursor,endIndex:end,isFinal:false});
+    cursor=end;
+  }
+  parts.push({startIndex:cursor,endIndex:total,isFinal:true});
+  return parts;
 }
-function routeGoogleWebUrl(address){
-  const params=new URLSearchParams({api:'1',destination:address,travelmode:'driving',dir_action:'navigate'});
+function routeGoogleSections(startAddress){
+  const stops=validRouteStops().map((s,i)=>({label:stopLabel(s),address:stopAddress(s),stopNumber:i+1}));
+  const plan=routeNavigationPlan(),sections=[];
+  let origin=startAddress;
+  for(const part of plan){
+    const chunk=stops.slice(part.startIndex,part.endIndex);
+    if(part.isFinal){
+      sections.push({
+        origin,
+        destination:startAddress,
+        waypoints:chunk.map(x=>x.address),
+        startIndex:part.startIndex,
+        endIndex:part.endIndex,
+        isFinal:true
+      });
+    }else{
+      const destination=chunk[chunk.length-1]?.address||origin;
+      sections.push({
+        origin,
+        destination,
+        waypoints:chunk.slice(0,-1).map(x=>x.address),
+        startIndex:part.startIndex,
+        endIndex:part.endIndex,
+        isFinal:false
+      });
+      origin=destination;
+    }
+  }
+  return sections;
+}
+function routeGoogleWebUrl(origin,destination,waypoints=[]){
+  const params=new URLSearchParams({api:'1',origin,destination,travelmode:'driving',dir_action:'navigate'});
+  if(waypoints.length)params.set('waypoints',waypoints.join('|'));
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
-function routeGoogleAppUrl(address){
-  const params=new URLSearchParams({daddr:address,directionsmode:'driving'});
-  return `comgooglemaps://?${params.toString()}`;
+function routeGoogleAppUrl(webUrl){
+  return String(webUrl||'').replace(/^https?:\/\//,'comgooglemapsurl://');
 }
-function openRouteGoogleMaps(address){
-  const appUrl=routeGoogleAppUrl(address),webUrl=routeGoogleWebUrl(address);
+function openRouteGoogleMaps(origin,destination,waypoints=[]){
+  const webUrl=routeGoogleWebUrl(origin,destination,waypoints),appUrl=routeGoogleAppUrl(webUrl);
   const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
   if(ios){
     const started=Date.now();
     window.location.href=appUrl;
     setTimeout(()=>{
-      if(document.visibilityState==='visible'&&Date.now()-started<2500){
-        window.location.href=webUrl;
-      }
+      if(document.visibilityState==='visible'&&Date.now()-started<2500)window.location.href=webUrl;
     },1100);
     return;
   }
   window.location.href=webUrl;
+}
+async function ensureRouteNavigationStart(partIndex){
+  if(state.route.startMode==='location'){
+    const start=currentStartLocation();
+    if(!start?.address){alert('Choose a valid starting location first.');return false}
+    state.route.runStartAddress=start.address;
+    state.route.runStartLabel=start.name||'Starting Location';
+    await saveState();
+    return true;
+  }
+  if(state.route.runStartAddress)return true;
+  if(partIndex!==0){
+    alert('Open Route Part 1 first. That captures the exact current position so the final route can return to where you started.');
+    return false;
+  }
+  try{
+    const p=await routeGeoPosition();
+    state.route.runStartAddress=`${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+    state.route.runStartLabel='Current Position at Route Start';
+    await saveState();
+    return true;
+  }catch(e){
+    alert('Current Position needs location access so Google Maps can return to the exact place you started. Allow location access, or choose Other and select a saved starting location.');
+    return false;
+  }
+}
+async function launchRouteNavigationPart(partIndex){
+  const plan=routeNavigationPlan();
+  if(!plan.length){alert('Add at least one destination first.');return}
+  if(partIndex<0||partIndex>=plan.length)return;
+  if(!await ensureRouteNavigationStart(partIndex))return;
+  const sections=routeGoogleSections(state.route.runStartAddress),section=sections[partIndex];
+  if(!section)return;
+  openRouteGoogleMaps(section.origin,section.destination,section.waypoints);
+}
+function renderRouteNavigationButtons(){
+  const stops=validRouteStops(),plan=routeNavigationPlan();
+  if(!stops.length)return '';
+  if(plan.length===1){
+    return `<button class="btn primary route-start-route" data-route-navpart="0">🧭 OPEN FULL LOOP IN GOOGLE MAPS</button>`;
+  }
+  return plan.map((p,i)=>{
+    const first=p.startIndex+1,last=p.endIndex;
+    let detail;
+    if(p.isFinal&&first>last)detail='Return to starting location';
+    else if(p.isFinal)detail=`Stops ${first}–${last} • then return to start`;
+    else detail=`Stops ${first}–${last}`;
+    return `<button class="btn ${i===0?'primary':''} route-start-route" data-route-navpart="${i}"><span>🧭 GOOGLE MAPS • PART ${i+1} OF ${plan.length}</span><small>${esc(detail)}</small></button>`;
+  }).join('');
 }
 
 function renderRouteCreate(){
@@ -1740,7 +1824,7 @@ function renderRouteCreate(){
   <div class="route-start-shell"><div class="route-start-display"><div class="route-start-caption">STARTING<br>LOCATION</div><div class="route-start-copy"><strong>${esc(startName)}</strong><span>${esc(startAddress)}</span></div></div><div class="route-start-quick"><button class="btn route-start-mini" id="routeCurrentStart" ${startValue==='__current__'?'disabled':''}>📍<span>CURRENT</span></button><button class="btn route-start-mini" id="routeOtherStart">•••<span>OTHER</span></button></div></div>
   ${routeStartPickerOpen?`<div class="route-other-picker"><div class="field"><label>Choose Starting Location</label><select id="routeOtherStartSelect">${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div><div class="actions"><button class="btn" id="routeOtherCancel">Cancel</button><button class="btn primary" id="routeOtherApply" ${allStarts.length?'':'disabled'}>Use Location</button></div>${allStarts.length?'':'<div class="muted">No saved locations yet. Add one from Locations.</div>'}</div>`:''}
   <div id="routeOrder" class="route-order-list"></div></section>
-  <section class="route-plan-actions"><button class="btn" id="routeLoad">📂 Load Saved</button><button class="btn" id="routeSave" ${stops.length?'':'disabled'}>💾 Save Route</button><button class="btn primary route-start-route" id="routeStartRun" ${stops.length?'':'disabled'}>▶ START LOOP</button></section>`;
+  <section class="route-plan-actions"><button class="btn" id="routeLoad">📂 Load Saved</button><button class="btn" id="routeSave" ${stops.length?'':'disabled'}>💾 Save Route</button>${renderRouteNavigationButtons()}</section>`;
   wireRouteInlineForm();
   document.getElementById('routeClientHomes').onclick=()=>{routePickerKind='clients';renderRoute()};
   document.getElementById('routeLocationPicker').onclick=()=>{routePickerKind='locations';renderRoute()};
@@ -1752,7 +1836,7 @@ function renderRouteCreate(){
   if(document.getElementById('routeOtherCancel'))document.getElementById('routeOtherCancel').onclick=()=>{routeStartPickerOpen=false;renderRouteCreate()};
   if(document.getElementById('routeOtherApply'))document.getElementById('routeOtherApply').onclick=async()=>{const id=document.getElementById('routeOtherStartSelect')?.value;if(!id||!locationById(id))return;state.route.startMode='location';state.route.startLocationId=id;routeStartPickerOpen=false;resetRouteProgress();await saveState();renderRouteCreate()};
   document.getElementById('routeClear').onclick=async()=>{if(!confirm('Clear the current route?'))return;state.route.stops=[];resetRouteProgress();await saveState();renderRouteCreate()};
-  document.getElementById('routeStartRun').onclick=async()=>{if(await prepareRouteLoopStart()){await saveState();setRouteView('run')}};
+  view.querySelectorAll('[data-route-navpart]').forEach(b=>b.onclick=()=>launchRouteNavigationPart(Number(b.dataset.routeNavpart)));
   const box=document.getElementById('routeOrder');
   box.innerHTML=stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button></span></div>`).join(''):'<div class="route-empty">No destinations in this route yet.</div>';
   box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));
@@ -1760,36 +1844,11 @@ function renderRouteCreate(){
 }
 async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];resetRouteProgress();await saveState();renderRouteCreate()}
 
-function renderRouteRun(){
-  const view=document.getElementById('view'),stops=validRouteStops();
-  if(!stops.length){routePlannerView='create';return renderRouteCreate()}
-  if(!state.route.runStartAddress){routePlannerView='create';alert('Start the route again so the app can lock in the starting location for the return loop.');return renderRouteCreate()}
-  const points=routeLoopPoints();
-  let i=Math.max(0,Math.min(Number(state.route.runIndex)||0,points.length));state.route.runIndex=i;
-  setModulePrevious(()=>setRouteView('create'),'Plan Route');
-  if(i>=points.length){
-    view.innerHTML=`<section class="panel route-complete"><div class="route-complete-icon">✓</div><div class="title">Route Loop Complete</div><div class="muted">All ${stops.length} planned destinations are complete and you returned to ${esc(state.route.runStartLabel||'the starting location')}.</div><div class="actions"><button class="btn" id="routeRestart">Run Again</button><button class="btn primary" id="routeBackPlan">Back to Plan</button></div></section>`;
-    document.getElementById('routeRestart').onclick=async()=>{state.route.runIndex=0;await saveState();renderRouteRun()};
-    document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');return;
-  }
-  const point=points[i],pct=Math.round((i/points.length)*100),isReturn=!!point.isReturn;
-  const upcoming=points.slice(i+1,i+4);
-  view.innerHTML=`<section class="panel"><div class="route-run-top"><div><div class="title">Route Loop</div><div class="muted">${isReturn?'Return leg':`Stop ${i+1} of ${stops.length}`}</div></div><div class="route-run-percent">${pct}%</div></div><div class="progress"><div style="width:${pct}%"></div></div></section>
-  <section class="panel route-next-card"><div class="eyebrow">${isReturn?'FINAL LEG':'NEXT STOP'}</div><div class="route-next-address">${esc(point.label)}</div><div class="muted route-next-full-address">${esc(point.address)}</div><button class="btn primary route-open-nav" id="routeOpenGoogle">🧭 OPEN GOOGLE MAPS</button><button class="btn route-complete-stop" id="routeArrivedNext">${isReturn?'✓ BACK AT START • FINISH':'✓ ARRIVED • NEXT STOP'}</button></section>
-  ${upcoming.length?`<section class="panel"><div class="title">Coming Up</div><div class="route-batch-list">${upcoming.map(p=>`<div class="route-run-upnext ${p.isReturn?'route-return-leg':''}"><b>${p.isReturn?'↩':p.stopNumber}</b><span>${esc(p.label)}</span></div>`).join('')}</div></section>`:''}
-  <section class="route-run-actions"><button class="btn" id="routeBackPlan">Edit Plan</button>${i>0?'<button class="btn" id="routePreviousStop">Previous Stop</button>':''}</section>`;
-  document.getElementById('routeOpenGoogle').onclick=()=>openRouteGoogleMaps(point.address);
-  document.getElementById('routeArrivedNext').onclick=async()=>{state.route.runIndex=Math.min(points.length,i+1);await saveState();renderRouteRun()};
-  document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');
-  if(document.getElementById('routePreviousStop'))document.getElementById('routePreviousStop').onclick=async()=>{state.route.runIndex=Math.max(0,i-1);await saveState();renderRouteRun()};
-}
-
 function renderRoute(){
   if(routePlannerView==='create')return renderRouteCreate();
   if(routePlannerView==='locations')return renderRouteLocations();
   if(routePlannerView==='savedroutes')return renderSavedRoutes(false);
   if(routePlannerView==='load')return renderSavedRoutes(true);
-  if(routePlannerView==='run')return renderRouteRun();
   renderRouteMenu();
 }
 function renderLocations(){routePlannerView='locations';screen='route';renderRoute()}

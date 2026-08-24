@@ -2,17 +2,17 @@
 
 GitHub-ready public PWA build.
 
-## v1.6.7 Client Homes routing classification
-- Client Homes now combines inspection properties with permanent non-inspection client housing locations.
-- Locations marked `Client Housing` appear in the Client Homes selector but remain route-only and never enter inspections/reports.
-- Location editor now exposes Location Type so future non-inspection housing can be classified without code changes.
+## v1.6.7 multi-stop Google Maps sections + closed route loop
 
-
-- Replaces confusing four-stop "Batch Complete" workflow with one stop at a time.
-- Route-in-progress shows NEXT STOP, Google Maps, then ARRIVED • NEXT STOP.
-- Final leg returns to the route's captured starting point.
-- On iPhone, navigation first targets the installed Google Maps app via Google's iOS URL scheme, with a Maps URL fallback.
-- Web fallback requests driving navigation with `dir_action=navigate`.
+- Sends the planned loop to Google Maps in ordered multi-stop sections instead of one house at a time.
+- Up to 10 destinations ride in one native Google Maps section; larger routes continue in the next section.
+- The final section returns to the exact saved starting location.
+- Replaces the vague "Batch Complete" control with "Finished These Stops • Continue Route".
+- Route-in-progress shows the exact stops included in the next Google Maps section.
+- After finishing that section, **Finished These Stops • Continue Route** advances to the remaining addresses.
+- The final section includes the return to the route's captured starting point.
+- On iPhone, the handoff uses Google's `comgooglemapsurl://` scheme so an ordered multi-stop Maps URL opens in the installed Google Maps app, with a universal Maps URL fallback.
+- Maps URLs request driving navigation with `dir_action=navigate`.
 - Database schema remains 25. No roster/client/property migration.
 
 ## v1.6.1 changes
