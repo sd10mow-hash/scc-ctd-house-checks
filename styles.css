@@ -151,7 +151,19 @@ a{color:var(--accent)}
 .roomedit input,.roomedit select{min-height:40px;padding:8px}
 .checkline{display:flex;align-items:center;gap:8px}
 .checkline input{width:20px;height:20px;accent-color:var(--accent)}
-.route{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:8px;align-items:center;padding:9px;border-radius:11px;background:rgba(255,255,255,.028);border:1px solid var(--border);margin:6px 0}
+.route{width:100%;display:grid;grid-template-columns:56px minmax(0,1fr) 132px;gap:10px;align-items:center;padding:11px 12px;border-radius:12px;background:rgba(255,255,255,.028);border:1px solid var(--border);margin:7px 0}
+.route>span:nth-child(2){min-width:0;font-weight:820;line-height:1.25}
+.route-hub{display:grid;gap:10px;margin-top:10px}
+.route-hub-button,.route-tool-button{width:100%;min-height:62px;border:1px solid var(--border);border-radius:15px;background:linear-gradient(180deg,#171d22,#0c1114);color:var(--text);font-size:15px;font-weight:900;display:flex;align-items:center;gap:11px;padding:13px 15px;text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 10px 28px rgba(0,0,0,.23)}
+.route-hub-button span{font-size:22px}.route-hub-button.primary{border-color:rgba(71,235,211,.56);background:linear-gradient(180deg,#17363a,#0a2527)}
+.route-create-toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+.route-tool-button{min-height:54px;font-size:12px;justify-content:flex-start}.route-tool-button:disabled{opacity:.42}
+.route-order-panel{overflow:hidden}.route-order-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.route-order-list{width:100%}
+.route-start-row{border-color:rgba(71,235,211,.28);background:rgba(71,235,211,.055)}
+.route-row-controls{display:grid;grid-template-columns:40px 40px 40px;gap:4px;justify-content:end}
+.route-arrow,.route-remove{width:40px;height:40px;border-radius:10px;border:1px solid var(--border);background:linear-gradient(180deg,#181f24,#0c1114);color:var(--text);font-size:21px;font-weight:950;display:flex;align-items:center;justify-content:center}
+.route-arrow:disabled{opacity:.28}.route-remove{color:#ff9c9c;font-size:24px}.route-empty{padding:18px 8px;color:var(--muted);text-align:center;border:1px dashed var(--border);border-radius:12px;margin-top:8px}
+.route-navigate{width:100%;min-height:50px}.route-nav-actions{margin-top:12px}.route-select-actions{margin-bottom:8px}.route-start-hint{margin-top:7px}.route-inline-panel{border-color:rgba(71,235,211,.24)}
 .dbstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
 .stat{border-radius:13px;padding:11px;text-align:center}
 .stat strong{display:block;font-size:24px;color:var(--accent)}
@@ -1248,7 +1260,7 @@ a{color:var(--accent)}
 }
 
 
-/* v1.6.0 finalized-day lock + Vehicle Logs placeholder */
+/* v1.6.1 route planner build */
 .finalized-day-panel{
   text-align:center;
   border-color:rgba(91,164,255,.36);
@@ -1295,4 +1307,11 @@ a{color:var(--accent)}
   font-size:10px;
   font-weight:950;
   letter-spacing:.09em;
+}
+
+@media(max-width:560px){
+  .route{grid-template-columns:50px minmax(0,1fr) 120px;padding:10px 8px;gap:7px}
+  .route-row-controls{grid-template-columns:36px 36px 36px;gap:4px}
+  .route-arrow,.route-remove{width:36px;height:40px}
+  .route-create-toolbar{grid-template-columns:1fr 1fr}
 }

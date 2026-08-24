@@ -1,15 +1,16 @@
-# SCC-CTD House Checks v1.6.0
+# SCC-CTD House Checks v1.6.1
 
 GitHub-ready public PWA build.
 
-## v1.6.0 changes
-- Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
-- Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
-- Required houses sort first; same-street houses sort by ascending house number.
-- Route planner now has an address picker with OK/Cancel, selectable home base, manual move controls, and Auto Order by street/number progression.
-- Two base locations are seeded: Home Office at 519 Court St and Transportation Division at 3977 Rhodes Avenue.
-- Final report PNG is dynamically sized so the **entire report** and full Remarks lines are included in one image.
-- Report/history names remain 3×3 masked by default.
+## v1.6.1 changes
+- Rebuilt Route Planner as a clean three-button hub: **Create Route**, **Business Locations**, and **Saved Locations**.
+- Create Route has **Client Homes**, **Route Locations**, **Insert Address**, **Smart Route**, **Save Route**, and **Load Route** controls.
+- Client Homes uses the encrypted local property database, supports **Select All**, and returns to Create Route with **Apply**.
+- Route rows stretch across the usable screen with aligned **up / down / remove** controls for fast phone ordering.
+- Starting Point supports **Current Position** or any saved route location.
+- Saved route configurations persist locally and can be loaded from inside Create Route.
+- Navigation hands the finished order to Google Maps. Smart Route remains a local street/house-number organizer and never silently sends the house list to an external optimizer.
+- Added private location-seed import support so route-only addresses can be loaded into the encrypted local database without publishing them in the GitHub app shell.
 
 Private client data is not included in this public package.
 
@@ -48,7 +49,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 - Portable database transfer uses AES-256-GCM encrypted .sccbackup files.
 - Transfer key uses PBKDF2-SHA256 with 240,000 iterations and a separate transfer password.
 - Database export requires the app PIN again.
-- The app accepts only recipient addresses ending in @shawneecounselingcenter.org before export proceeds.
+- The app accepts only recipient addresses ending in @shawneecounseling.org before export proceeds.
 - Plain JSON export is disabled from the normal UI.
 - Import accepts encrypted .sccbackup files and asks for the transfer password, then saves the imported data into the recipient phone's encrypted local database under that user's own app PIN.
 - iPhone limitation: after the PWA hands the encrypted attachment to Apple's share sheet, the web app cannot inspect or enforce the final Mail recipient selected there. The in-app work-domain validation occurs before export.
@@ -57,7 +58,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.6.0 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.6.1 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -182,7 +183,7 @@ V1.5.6 CLEAN SETTINGS HUB
 - Release Database opens its own encrypted database-release interface.
 - Load Database opens a dedicated large file picker and now exposes the encrypted .sccbackup importer from Settings.
 - This fixes the navigation dead-end created when Database was removed from the main screen.
-- The previously emailed Clean Inspection State .sccbackup is compatible with v1.6.0.
+- The previously emailed Clean Inspection State .sccbackup is compatible with v1.6.1.
 - Load Database accepts the .sccbackup extension plus broad iPhone file-picker MIME fallbacks.
 - Successful imports return to Settings; errors remain visible instead of silently failing.
 - Save explicitly writes the current encrypted state to this device.
@@ -228,7 +229,7 @@ V1.5.9 FULL-NAME FINAL REPORT + SPECIAL NOTES
 - PNG generation uses the same full-name and Special Notes rules as the on-screen/print final report.
 
 
-V1.6.0 FINALIZED-DAY LOCK + VEHICLE LOGS PLACEHOLDER
+V1.6.1 FINALIZED-DAY LOCK + VEHICLE LOGS PLACEHOLDER
 - Main-screen REPORTS button is replaced by VEHICLE LOGS • UNDER CONST.
 - Vehicle Logs is moved to the button immediately above Settings.
 - Vehicle Logs currently opens a clean under-construction placeholder so the slot is reserved without pretending unfinished functionality exists.

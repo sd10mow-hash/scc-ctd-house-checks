@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.0';
+const VERSION='1.6.1';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -13,7 +13,7 @@ let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
 let inspectionView='calendar',inspectionDayKey=null,reportOrigin='menu';
 let settingsView='menu';
-let routePickerOpen=false,routePickerDraft=null;
+let routePlannerView='menu',routePickerKind='',routePickerDraft=null,routeInlineMode='';
 let codesUnlocked=false;
 
 const deepClone=o=>typeof structuredClone==='function'?structuredClone(o):JSON.parse(JSON.stringify(o));
@@ -84,15 +84,8 @@ function compareProperties(a,b){
 }
 function orderedProperties(list=state.properties){return [...list].sort(compareProperties)}
 function ensureBaseLocations(list){
-  const defs=[
-    {id:'base-home-office',name:'Home Office',address:'519 Court St, Portsmouth, OH 45662',type:'Office',phone:'',notes:'Base location',isBase:true},
-    {id:'base-transportation',name:'Transportation Division',address:'3977 Rhodes Avenue, Portsmouth, OH 45662',type:'Office',phone:'',notes:'Base location; user-provided operating address',isBase:true}
-  ];
-  for(const d of defs){
-    let x=list.find(l=>l.id===d.id)||list.find(l=>String(l.name||'').toLowerCase()===d.name.toLowerCase());
-    if(!x)list.push({...d});else{x.isBase=true;if(!x.address)x.address=d.address}
-  }
-  return list;
+  // Route locations stay in the encrypted local database. Public app files do not seed private addresses.
+  return Array.isArray(list)?list:[];
 }
 function baseLocations(){return state.locations.filter(l=>l.isBase)}
 
@@ -100,11 +93,12 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:23,
+    schemaVersion:24,
     properties:[],
     inactiveClients:[],
-    locations:ensureBaseLocations([]),
-    route:{stops:[],baseId:'base-home-office'},
+    locations:[],
+    route:{stops:[],startMode:'current',startLocationId:''},
+    savedRoutes:[],
     settings:{
       reporterName:'',
       authorizedUserCell:'',
@@ -199,11 +193,28 @@ function normalizeState(raw){
   d.inactiveClients=Array.isArray(s.inactiveClients)?s.inactiveClients.map(normalizeInactiveClient):[];
   d.locations=Array.isArray(s.locations)?s.locations.map((l,i)=>({
     id:String(l?.id??('l'+i+'_'+Date.now())),name:l?.name??'Unnamed Location',address:l?.address??'',
-    type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase
+    type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase,
+    category:l?.category==='business'?'business':'saved'
   })):[];
+  // Remove only the obsolete demo/base addresses that older public builds injected.
+  d.locations=d.locations.filter(l=>!['base-home-office','base-transportation'].includes(l.id));
   ensureBaseLocations(d.locations);
-  d.route=s.route&&Array.isArray(s.route.stops)?{...s.route,stops:s.route.stops}:{stops:[]};
-  if(!d.route.baseId)d.route.baseId='base-home-office';
+  const oldRoute=s.route&&Array.isArray(s.route.stops)?s.route:{};
+  const legacyBaseId=String(oldRoute.baseId||'');
+  d.route={
+    stops:Array.isArray(oldRoute.stops)?oldRoute.stops.map(x=>deepClone(x)):[],
+    startMode:oldRoute.startMode==='location'?'location':'current',
+    startLocationId:String(oldRoute.startLocationId||legacyBaseId||'')
+  };
+  if(d.route.startMode==='location'&&!d.locations.some(l=>l.id===d.route.startLocationId)){
+    d.route.startMode='current';d.route.startLocationId='';
+  }
+  d.savedRoutes=Array.isArray(s.savedRoutes)?s.savedRoutes.map(r=>({
+    id:String(r?.id||uuid()),name:String(r?.name||'Saved Route'),createdAt:r?.createdAt||new Date().toISOString(),
+    updatedAt:r?.updatedAt||r?.createdAt||new Date().toISOString(),
+    startMode:r?.startMode==='location'?'location':'current',startLocationId:String(r?.startLocationId||''),
+    stops:Array.isArray(r?.stops)?r.stops.map(x=>deepClone(x)):[]
+  })):[];
   const oldNum=s.settings?.reportTextNumber||s.settings?.transportNumber||'';
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
   if(!d.settings.reporterName&&s.settings?.driverName)d.settings.reporterName=s.settings.driverName;
@@ -351,7 +362,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:23});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:24});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -590,6 +601,10 @@ function resetModuleState(){
   hideFullNames();
   codesUnlocked=false;
   settingsView='menu';
+  routePlannerView='menu';
+  routePickerKind='';
+  routePickerDraft=null;
+  routeInlineMode='';
   activePropertyId=null;
   editPropertyId=null;
   editLocationId=null;
@@ -1480,64 +1495,156 @@ function renderClientSearch(){
   });
 }
 /* ---------- Locations + Route ---------- */
-function renderLocations(){
-  const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="title">Other Relevant Locations</div><div class="muted">Non-residential places can be stored and routed without appearing on the house-check report.</div></section>
-  <section class="grid">${state.locations.map(l=>`<article class="card"><h3>${esc(l.name)}</h3><div class="meta">${esc(l.type)} • ${esc(l.address)}</div>${l.phone?`<div class="muted">${esc(fmtPhone(l.phone))}</div>`:''}<div class="actions"><button class="btn" data-editloc="${esc(l.id)}">Edit</button><a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}">Map</a><button class="btn red" data-delloc="${esc(l.id)}">Remove</button></div></article>`).join('')||'<div class="muted">No extra locations saved yet.</div>'}</section>
-  <div class="actions"><button class="btn primary" id="addLocation">+ Add Location</button></div><div id="locationEditor"></div>`;
-  view.querySelectorAll('[data-editloc]').forEach(b=>b.onclick=()=>{editLocationId=b.dataset.editloc;renderLocations()});
-  view.querySelectorAll('[data-delloc]').forEach(b=>b.onclick=async()=>{state.locations=state.locations.filter(l=>l.id!==b.dataset.delloc);state.route.stops=state.route.stops.filter(s=>!(s.kind==='location'&&s.id===b.dataset.delloc));await saveState();renderLocations()});
-  document.getElementById('addLocation').onclick=()=>{const l={id:uuid(),name:'New Location',address:'',type:'Other',phone:'',notes:''};state.locations.push(l);editLocationId=l.id;renderLocations()};
-  if(editLocationId)renderLocationEditor(state.locations.find(l=>l.id===editLocationId));
+function routeLocationCategory(l){return l?.category==='business'?'business':'saved'}
+function routeLocationTitle(category){return category==='business'?'Business Locations':'Saved Locations'}
+function routeLocationList(category){return state.locations.filter(l=>routeLocationCategory(l)===category)}
+function locationById(id){return state.locations.find(l=>l.id===id)||null}
+function currentStartLocation(){return state.route.startMode==='location'?locationById(state.route.startLocationId):null}
+function routeStartLabel(){const l=currentStartLocation();return l?`${l.name} • ${l.address}`:'Current Position'}
+function makeRouteStop(kind,obj){
+  if(kind==='property')return {kind:'property',id:obj.id};
+  if(kind==='location')return {kind:'location',id:obj.id};
+  return {kind:'custom',id:obj.id||uuid(),name:obj.name||'Inserted Address',address:obj.address||''};
 }
-function renderLocationEditor(l){
-  if(!l)return;
-  const e=document.getElementById('locationEditor');
-  e.innerHTML=`<section class="panel"><div class="title">Edit Location</div><div class="formgrid">
-    <div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div>
-    <div class="field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div>
-    <div class="field"><label>Type</label><select id="locType">${['Office','Meeting Site','Pickup / Drop-off','Medical','Pharmacy','Other'].map(t=>`<option ${l.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
-    <div class="field"><label>Phone</label><input id="locPhone" value="${esc(l.phone)}"></div>
-  </div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes)}</textarea></div><div class="actions"><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
-  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();l.type=document.getElementById('locType').value;l.phone=document.getElementById('locPhone').value.trim();l.notes=document.getElementById('locNotes').value.trim();await saveState();editLocationId=null;renderLocations()};
+function stopObj(s){
+  if(s.kind==='property')return state.properties.find(p=>p.id===s.id);
+  if(s.kind==='location')return state.locations.find(l=>l.id===s.id);
+  if(s.kind==='custom')return s;
+  return null;
 }
-function stopObj(s){return s.kind==='property'?state.properties.find(p=>p.id===s.id):state.locations.find(l=>l.id===s.id)}
-function stopLabel(s){const o=stopObj(s);return o?(s.kind==='property'?o.address:`${o.name} • ${o.address}`):'Missing stop'}
+function stopLabel(s){const o=stopObj(s);if(!o)return'Missing stop';if(s.kind==='property')return o.address;if(s.kind==='custom')return o.name&&o.name!=='Inserted Address'?`${o.name} • ${o.address}`:o.address;return `${o.name} • ${o.address}`}
 function stopAddress(s){return stopObj(s)?.address||''}
-function baseLocation(){return state.locations.find(l=>l.id===state.route.baseId)||baseLocations()[0]||null}
+function validRouteStops(list=state.route.stops){return (list||[]).filter(s=>stopAddress(s))}
+function routeStopExists(kind,id){return state.route.stops.some(s=>s.kind===kind&&s.id===id)}
 function smartRouteCompare(a,b){
-  const A=addressParts(stopAddress(a)),B=addressParts(stopAddress(b));if(A.street!==B.street)return A.street.localeCompare(B.street);return A.number-B.number;
+  const A=addressParts(stopAddress(a)),B=addressParts(stopAddress(b));
+  if(A.street!==B.street)return A.street.localeCompare(B.street);
+  return A.number-B.number;
 }
-function renderRoutePicker(){
-  const view=document.getElementById('view');if(!routePickerDraft)routePickerDraft=deepClone(state.route.stops);
-  const checked=(kind,id)=>routePickerDraft.some(s=>s.kind===kind&&s.id===id);
-  const nonBaseLocs=state.locations.filter(l=>!l.isBase);
-  view.innerHTML=`<section class="panel"><div class="title">Choose Route Stops</div><div class="muted">All known residential and saved addresses are here. Check what you need, then tap OK to return to the route.</div></section>
-  <section class="panel"><h3>Residential Properties</h3><div class="route-picker-list">${orderedProperties().map(p=>`<label class="route-choice"><input type="checkbox" data-pick-kind="property" data-pick-id="${esc(p.id)}" ${checked('property',p.id)?'checked':''}><span><b>${esc(p.address)}</b><small>${propertyNeedsChecks(p)?'Required house':'No required checks'}</small></span></label>`).join('')}</div>
-  <h3>Other Locations</h3><div class="route-picker-list">${nonBaseLocs.map(l=>`<label class="route-choice"><input type="checkbox" data-pick-kind="location" data-pick-id="${esc(l.id)}" ${checked('location',l.id)?'checked':''}><span><b>${esc(l.name)}</b><small>${esc(l.address)}</small></span></label>`).join('')||'<div class="muted">No other saved locations.</div>'}</div>
-  <div class="actions"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerOk">OK</button></div></section>`;
-  view.querySelectorAll('[data-pick-kind]').forEach(c=>c.onchange=()=>{const s={kind:c.dataset.pickKind,id:c.dataset.pickId};if(c.checked&&!routePickerDraft.some(x=>x.kind===s.kind&&x.id===s.id))routePickerDraft.push(s);if(!c.checked)routePickerDraft=routePickerDraft.filter(x=>!(x.kind===s.kind&&x.id===s.id))});
-  document.getElementById('routePickerCancel').onclick=()=>{routePickerOpen=false;routePickerDraft=null;renderRoute()};
-  document.getElementById('routePickerOk').onclick=async()=>{state.route.stops=routePickerDraft.filter(s=>stopAddress(s));routePickerOpen=false;routePickerDraft=null;await saveState();renderRoute()};
-}
-function renderRoute(){
-  if(routePickerOpen)return renderRoutePicker();
-  const view=document.getElementById('view'),bases=baseLocations(),base=baseLocation(),stops=state.route.stops.filter(s=>stopAddress(s));
-  view.innerHTML=`<section class="panel"><div class="title">Circular Route Planner</div><div class="muted">Choose a home base, pick stops from the address menu, then manually move stops or use Auto Order for street/house-number progression. Google Maps handles the driving path and returns to the same base.</div></section>
-  <section class="panel"><div class="formgrid"><div class="field"><label>Home Base (start and finish)</label><select id="routeBase">${bases.map(l=>`<option value="${esc(l.id)}" ${base?.id===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div></div>
-  <div class="actions"><button class="btn primary" id="chooseStops">Choose Stops</button><button class="btn" id="autoOrder" ${stops.length<2?'disabled':''}>Auto Order</button></div></section>
-  <section class="panel"><div class="title">Route Order</div><div id="routeOrder"></div><div class="actions"><a id="mapsLink" class="btn primary" target="_blank" rel="noopener">Open Loop in Google Maps</a></div><div class="notice">Auto Order keeps the same street together and puts house numbers in progression. True shortest-distance optimization would require sending residential addresses to an external routing service, so this build does not do that silently.</div></section>`;
-  document.getElementById('routeBase').onchange=async e=>{state.route.baseId=e.target.value;state.route.stops=state.route.stops.filter(s=>s.id!==state.route.baseId);await saveState();renderRoute()};
-  document.getElementById('chooseStops').onclick=()=>{routePickerDraft=deepClone(state.route.stops);routePickerOpen=true;renderRoute()};
-  document.getElementById('autoOrder').onclick=async()=>{state.route.stops=[...state.route.stops].sort(smartRouteCompare);await saveState();renderRoute()};
-  const box=document.getElementById('routeOrder');
-  box.innerHTML=(base?`<div class="route base-stop"><b>BASE</b><span>${esc(base.name)} • ${esc(base.address)}</span><span></span></div>`:'')+stops.map((s,i)=>`<div class="route"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span><button class="btn" data-up="${i}" ${i===0?'disabled':''}>↑</button><button class="btn" data-down="${i}" ${i===stops.length-1?'disabled':''}>↓</button></span></div>`).join('')+(base?`<div class="route base-stop"><b>END</b><span>${esc(base.name)} • ${esc(base.address)}</span><span></span></div>`:'');
-  box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
-  const a=document.getElementById('mapsLink');
-  if(!base||stops.length<1){a.style.opacity='.45';a.removeAttribute('href')}else{const ads=stops.map(stopAddress);a.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(base.address)}&destination=${encodeURIComponent(base.address)}&waypoints=${encodeURIComponent(ads.join('|'))}&travelmode=driving`}
-}
-async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];await saveState();renderRoute()}
+function setRouteView(view){routePlannerView=view;routePickerKind='';routePickerDraft=null;routeInlineMode='';renderRoute()}
 
+function renderRouteMenu(){
+  const view=document.getElementById('view');
+  setModulePrevious(goHome,'Previous');
+  view.innerHTML=`<section class="panel"><div class="title">Route Planner</div><div class="muted">Build routes, keep route-only destinations separate from inspection properties, and hand the finished order to navigation.</div></section>
+  <section class="route-hub">
+    <button class="route-hub-button primary" id="routeCreate"><span>🧭</span><b>CREATE ROUTE</b></button>
+    <button class="route-hub-button" id="routeBusiness"><span>🏢</span><b>BUSINESS LOCATIONS</b></button>
+    <button class="route-hub-button" id="routeSaved"><span>📌</span><b>SAVED LOCATIONS</b></button>
+  </section>`;
+  document.getElementById('routeCreate').onclick=()=>setRouteView('create');
+  document.getElementById('routeBusiness').onclick=()=>setRouteView('business');
+  document.getElementById('routeSaved').onclick=()=>setRouteView('saved');
+}
+
+function renderRouteLocations(category){
+  const view=document.getElementById('view'),items=routeLocationList(category);
+  setModulePrevious(()=>setRouteView('menu'),'Route Planner');
+  view.innerHTML=`<section class="panel"><div class="title">${routeLocationTitle(category)}</div><div class="muted">These destinations are route-only. They do not create beds, clients, inspections, or report rows.</div></section>
+  <section class="grid">${items.map(l=>`<article class="card"><h3>${esc(l.name)}</h3><div class="meta">${esc(l.address||'Address not entered')}</div>${l.notes?`<div class="muted">${esc(l.notes)}</div>`:''}<div class="actions"><button class="btn primary" data-addloc="${esc(l.id)}">Add to Route</button><button class="btn" data-editloc="${esc(l.id)}">Edit</button><a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}">Map</a><button class="btn red" data-delloc="${esc(l.id)}">Remove</button></div></article>`).join('')||'<div class="muted">No locations saved in this section yet.</div>'}</section>
+  <div class="actions"><button class="btn primary" id="addRouteLocation">+ Add ${category==='business'?'Business':'Saved'} Location</button></div><div id="locationEditor"></div>`;
+  view.querySelectorAll('[data-addloc]').forEach(b=>b.onclick=async()=>{const l=locationById(b.dataset.addloc);if(!l)return;if(!routeStopExists('location',l.id))state.route.stops.push(makeRouteStop('location',l));await saveState();alert('Added to the current route.');});
+  view.querySelectorAll('[data-editloc]').forEach(b=>b.onclick=()=>{editLocationId=b.dataset.editloc;renderRouteLocations(category)});
+  view.querySelectorAll('[data-delloc]').forEach(b=>b.onclick=async()=>{const id=b.dataset.delloc;if(!confirm('Remove this route location?'))return;state.locations=state.locations.filter(l=>l.id!==id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='location'&&s.id===id));if(state.route.startLocationId===id){state.route.startMode='current';state.route.startLocationId=''}await saveState();renderRouteLocations(category)});
+  document.getElementById('addRouteLocation').onclick=()=>{const l={id:uuid(),name:'New Location',address:'',type:'Other',phone:'',notes:'',isBase:false,category};state.locations.push(l);editLocationId=l.id;renderRouteLocations(category)};
+  if(editLocationId)renderRouteLocationEditor(locationById(editLocationId),category);
+}
+function renderRouteLocationEditor(l,category){
+  if(!l)return;const e=document.getElementById('locationEditor');
+  e.innerHTML=`<section class="panel"><div class="title">Edit Location</div><div class="formgrid"><div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div><div class="field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div></div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes||'')}</textarea></div><div class="actions"><button class="btn" id="cancelLocationEdit">Cancel</button><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
+  document.getElementById('cancelLocationEdit').onclick=()=>{editLocationId=null;renderRouteLocations(category)};
+  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();l.notes=document.getElementById('locNotes').value.trim();l.category=category;await saveState();editLocationId=null;renderRouteLocations(category)};
+}
+
+function renderRoutePicker(kind){
+  const view=document.getElementById('view');
+  if(!routePickerDraft)routePickerDraft=deepClone(state.route.stops);
+  const checked=(k,id)=>routePickerDraft.some(s=>s.kind===k&&s.id===id);
+  const isClients=kind==='clients';
+  const rows=isClients?orderedProperties():state.locations;
+  setModulePrevious(()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()},'Create Route');
+  view.innerHTML=`<section class="panel"><div class="title">${isClients?'Client Homes':'Route Locations'}</div><div class="muted">${isClients?'Select any inspection-property addresses you want. You can select every house at once.':'Choose business or saved destinations to add to this route.'}</div></section>
+  <section class="panel"><div class="actions route-select-actions"><button class="btn" id="selectAllRoute">Select All</button><button class="btn" id="clearRouteSelection">Clear</button></div><div class="route-picker-list">${rows.map(o=>`<label class="route-choice"><input type="checkbox" data-pick-kind="${isClients?'property':'location'}" data-pick-id="${esc(o.id)}" ${checked(isClients?'property':'location',o.id)?'checked':''}><span><b>${esc(isClients?o.address:o.name)}</b><small>${esc(isClients?(propertyNeedsChecks(o)?'Inspection property':'Property • no required checks'):o.address)}</small></span></label>`).join('')||'<div class="muted">No addresses available.</div>'}</div><div class="actions"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerApply">Apply</button></div></section>`;
+  const boxes=[...view.querySelectorAll('[data-pick-kind]')];
+  const sync=()=>{const selected=routePickerDraft.filter(s=>s.kind==='custom');for(const c of boxes)if(c.checked)selected.push({kind:c.dataset.pickKind,id:c.dataset.pickId});const untouched=state.route.stops.filter(s=>!boxes.some(c=>c.dataset.pickKind===s.kind&&c.dataset.pickId===s.id)&&s.kind!=='custom');routePickerDraft=[...untouched,...selected]};
+  boxes.forEach(c=>c.onchange=sync);
+  document.getElementById('selectAllRoute').onclick=()=>{boxes.forEach(c=>c.checked=true);sync()};
+  document.getElementById('clearRouteSelection').onclick=()=>{boxes.forEach(c=>c.checked=false);sync()};
+  document.getElementById('routePickerCancel').onclick=()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()};
+  document.getElementById('routePickerApply').onclick=async()=>{sync();state.route.stops=routePickerDraft.filter(s=>stopAddress(s));routePickerKind='';routePickerDraft=null;await saveState();renderRouteCreate()};
+}
+
+function renderRouteInlineForm(){
+  if(!routeInlineMode)return'';
+  if(routeInlineMode==='insert')return `<section class="panel route-inline-panel"><div class="title">Insert Address</div><div class="formgrid"><div class="field"><label>Label (optional)</label><input id="routeInsertName" placeholder="Pickup, appointment, etc."></div><div class="field"><label>Address</label><input id="routeInsertAddress" placeholder="Street, city, state ZIP"></div></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeInsertApply">Apply</button></div></section>`;
+  if(routeInlineMode==='save')return `<section class="panel route-inline-panel"><div class="title">Save Current Route</div><div class="field"><label>Route Name</label><input id="routeSaveName" placeholder="Nightly House Checks"></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeSaveApply">Save Route</button></div></section>`;
+  return'';
+}
+function wireRouteInlineForm(){
+  const cancel=document.getElementById('routeInlineCancel');if(cancel)cancel.onclick=()=>{routeInlineMode='';renderRouteCreate()};
+  const insert=document.getElementById('routeInsertApply');if(insert)insert.onclick=async()=>{const address=document.getElementById('routeInsertAddress').value.trim();if(!address){alert('Enter an address.');return}const name=document.getElementById('routeInsertName').value.trim()||'Inserted Address';state.route.stops.push(makeRouteStop('custom',{id:uuid(),name,address}));routeInlineMode='';await saveState();renderRouteCreate()};
+  const save=document.getElementById('routeSaveApply');if(save)save.onclick=async()=>{const name=document.getElementById('routeSaveName').value.trim();if(!name){alert('Enter a route name.');return}const now=new Date().toISOString();state.savedRoutes.push({id:uuid(),name,createdAt:now,updatedAt:now,startMode:state.route.startMode,startLocationId:state.route.startLocationId,stops:deepClone(state.route.stops)});routeInlineMode='';await saveState();renderRouteCreate()};
+}
+
+function renderRouteLoad(){
+  const view=document.getElementById('view');
+  setModulePrevious(()=>setRouteView('create'),'Create Route');
+  const list=(state.savedRoutes||[]).slice().sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+  view.innerHTML=`<section class="panel"><div class="title">Load Route</div><div class="muted">Choose a saved route configuration. Loading replaces the current route workspace only.</div></section><section class="history-list">${list.map(r=>`<article class="card history-card"><div><b>${esc(r.name)}</b><div class="meta">${r.stops.length} stops • ${new Date(r.updatedAt||r.createdAt).toLocaleDateString()}</div></div><div class="actions"><button class="btn primary" data-loadroute="${esc(r.id)}">Load</button><button class="btn red" data-delroute="${esc(r.id)}">Delete</button></div></article>`).join('')||'<section class="panel"><div class="muted">No saved routes yet.</div></section>'}</section>`;
+  view.querySelectorAll('[data-loadroute]').forEach(b=>b.onclick=async()=>{const r=state.savedRoutes.find(x=>x.id===b.dataset.loadroute);if(!r)return;state.route={stops:deepClone(r.stops),startMode:r.startMode==='location'?'location':'current',startLocationId:r.startLocationId||''};if(state.route.startMode==='location'&&!locationById(state.route.startLocationId)){state.route.startMode='current';state.route.startLocationId=''}await saveState();setRouteView('create')});
+  view.querySelectorAll('[data-delroute]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this saved route?'))return;state.savedRoutes=state.savedRoutes.filter(x=>x.id!==b.dataset.delroute);await saveState();renderRouteLoad()});
+}
+
+function routeMapsUrl(){
+  const stops=validRouteStops();if(!stops.length)return'';
+  const addresses=stops.map(stopAddress),destination=addresses[addresses.length-1],waypoints=addresses.slice(0,-1);
+  const params=new URLSearchParams({api:'1',destination,travelmode:'driving'});
+  const start=currentStartLocation();if(start?.address)params.set('origin',start.address);
+  if(waypoints.length)params.set('waypoints',waypoints.join('|'));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+function renderRouteCreate(){
+  if(routePickerKind)return renderRoutePicker(routePickerKind);
+  const view=document.getElementById('view'),stops=validRouteStops(),allStarts=state.locations.filter(l=>l.address);
+  setModulePrevious(()=>setRouteView('menu'),'Route Planner');
+  const startValue=state.route.startMode==='location'&&locationById(state.route.startLocationId)?state.route.startLocationId:'__current__';
+  view.innerHTML=`<section class="panel"><div class="title">Create Route</div><div class="muted">Choose addresses, set the starting point, use Smart Route if useful, then fine-tune the order manually.</div></section>
+  <section class="route-create-toolbar">
+    <button class="route-tool-button" id="routeClientHomes">🏠 <b>CLIENT HOMES</b></button>
+    <button class="route-tool-button" id="routeLocationPicker">📌 <b>ROUTE LOCATIONS</b></button>
+    <button class="route-tool-button" id="routeInsertAddress">＋ <b>INSERT ADDRESS</b></button>
+    <button class="route-tool-button" id="routeSmart" ${stops.length<2?'disabled':''}>🧠 <b>SMART ROUTE</b></button>
+    <button class="route-tool-button" id="routeSave">💾 <b>SAVE ROUTE</b></button>
+    <button class="route-tool-button" id="routeLoad">📂 <b>LOAD ROUTE</b></button>
+  </section>
+  ${renderRouteInlineForm()}
+  <section class="panel"><div class="field"><label>Starting Point</label><select id="routeStart"><option value="__current__" ${startValue==='__current__'?'selected':''}>Current Position</option>${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div><div class="muted route-start-hint">Transportation Home can be selected here and saved with a route configuration.</div></section>
+  <section class="panel route-order-panel"><div class="route-order-head"><div><div class="title">Current Route</div><div class="muted">Full-width rows keep the move controls lined up. Smart Route never disables manual ordering.</div></div><button class="btn red" id="routeClear" ${stops.length?'':'disabled'}>Clear</button></div><div id="routeOrder" class="route-order-list"></div><div class="actions route-nav-actions"><a id="routeNavigate" class="btn primary route-navigate" target="_blank" rel="noopener">Navigate</a></div><div class="notice">Smart Route is a local street-and-house-number organizer. It does not send the house list to an external optimization service. You can always correct the order with the arrows.</div></section>`;
+  wireRouteInlineForm();
+  document.getElementById('routeClientHomes').onclick=()=>{routePickerKind='clients';routePickerDraft=deepClone(state.route.stops);renderRoute()};
+  document.getElementById('routeLocationPicker').onclick=()=>{routePickerKind='locations';routePickerDraft=deepClone(state.route.stops);renderRoute()};
+  document.getElementById('routeInsertAddress').onclick=()=>{routeInlineMode='insert';renderRouteCreate()};
+  document.getElementById('routeSmart').onclick=async()=>{state.route.stops=[...state.route.stops].sort(smartRouteCompare);await saveState();renderRouteCreate()};
+  document.getElementById('routeSave').onclick=()=>{routeInlineMode='save';renderRouteCreate()};
+  document.getElementById('routeLoad').onclick=()=>setRouteView('load');
+  document.getElementById('routeStart').onchange=async e=>{if(e.target.value==='__current__'){state.route.startMode='current';state.route.startLocationId=''}else{state.route.startMode='location';state.route.startLocationId=e.target.value}await saveState();renderRouteCreate()};
+  document.getElementById('routeClear').onclick=async()=>{if(!confirm('Clear the current route?'))return;state.route.stops=[];await saveState();renderRouteCreate()};
+  const box=document.getElementById('routeOrder');
+  box.innerHTML=`<div class="route route-start-row"><b>START</b><span>${esc(routeStartLabel())}</span><span class="route-row-controls"></span></div>`+(stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button><button class="route-remove" data-remove="${i}" aria-label="Remove stop">×</button></span></div>`).join(''):'<div class="route-empty">No destinations inserted yet.</div>');
+  box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));
+  box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
+  box.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{state.route.stops.splice(+b.dataset.remove,1);await saveState();renderRouteCreate()});
+  const nav=document.getElementById('routeNavigate'),url=routeMapsUrl();if(url)nav.href=url;else{nav.style.opacity='.42';nav.removeAttribute('href')}
+}
+async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];await saveState();renderRouteCreate()}
+function renderRoute(){
+  if(routePlannerView==='create')return renderRouteCreate();
+  if(routePlannerView==='business')return renderRouteLocations('business');
+  if(routePlannerView==='saved')return renderRouteLocations('saved');
+  if(routePlannerView==='load')return renderRouteLoad();
+  renderRouteMenu();
+}
+function renderLocations(){routePlannerView='saved';screen='route';renderRoute()}
 
 /* ---------- PIN-protected Lock Codes ---------- */
 function lockCodeText(){
@@ -1942,12 +2049,13 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:23,
+    schemaVersion:24,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
     locations:state.locations,
     route:state.route,
+    savedRoutes:state.savedRoutes,
     settings:{
       organization:state.settings.organization,
       reportTextLabel:state.settings.reportTextLabel
@@ -2006,10 +2114,26 @@ async function openPortableBackup(file,password){
     throw new Error('Transfer password is incorrect or the backup is damaged.');
   }
   const payload=JSON.parse(DEC.decode(plain));
-  if(!payload||(!Array.isArray(payload.properties)&&!payload.operationalResetOnly))throw new Error('Backup contents are invalid.');
+  if(!payload||(!Array.isArray(payload.properties)&&!payload.operationalResetOnly&&!payload.locationSeedOnly))throw new Error('Backup contents are invalid.');
   return payload;
 }
 async function importDatabasePayload(incoming){
+  if(incoming?.locationSeedOnly){
+    const incomingLocations=Array.isArray(incoming.locations)?incoming.locations:[];
+    state.locations=Array.isArray(state.locations)?state.locations:[];
+    for(const raw of incomingLocations){
+      const l={id:String(raw.id||uuid()),name:String(raw.name||'Unnamed Location'),address:String(raw.address||''),type:String(raw.type||'Other'),phone:String(raw.phone||''),notes:String(raw.notes||''),isBase:!!raw.isBase,category:raw.category==='business'?'business':'saved'};
+      const ix=state.locations.findIndex(x=>x.id===l.id||((x.name||'').toLowerCase()===l.name.toLowerCase()&&(x.address||'').toLowerCase()===l.address.toLowerCase()));
+      if(ix>=0)state.locations[ix]={...state.locations[ix],...l};else state.locations.push(l);
+    }
+    if(incoming.defaultStartLocationId&&state.locations.some(l=>l.id===incoming.defaultStartLocationId)){
+      state.route=state.route||{stops:[]};
+      state.route.startMode='location';
+      state.route.startLocationId=incoming.defaultStartLocationId;
+    }
+    await saveState();
+    return;
+  }
   if(incoming?.operationalResetOnly){
     state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
     state.history=[];
@@ -2030,8 +2154,10 @@ async function importDatabasePayload(incoming){
   };
   state.properties=incoming.properties.map(normalizeProperty);
   state.inactiveClients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map(normalizeInactiveClient):keepInactive;
-  state.locations=Array.isArray(incoming.locations)?incoming.locations:[];
-  state.route=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
+  state.locations=Array.isArray(incoming.locations)?incoming.locations.map((l,i)=>({id:String(l?.id??('l'+i+'_'+Date.now())),name:l?.name??'Unnamed Location',address:l?.address??'',type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase,category:l?.category==='business'?'business':'saved'})):[];
+  const ir=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
+  state.route={stops:deepClone(ir.stops||[]),startMode:ir.startMode==='location'?'location':'current',startLocationId:String(ir.startLocationId||'')};
+  state.savedRoutes=Array.isArray(incoming.savedRoutes)?deepClone(incoming.savedRoutes):[];
   const incomingSettings=incoming.settings||{};
   state.settings={...state.settings,...incomingSettings,...localIdentity,reportTextLabel:incomingSettings.reportTextLabel||incomingSettings.transportLabel||state.settings.reportTextLabel,reportTextNumber:keepText||incomingSettings.reportTextNumber||incomingSettings.transportNumber||''};
   state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
