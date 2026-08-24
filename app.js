@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.6';
+const VERSION='1.6.7';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1499,6 +1499,7 @@ function renderClientSearch(){
 }
 /* ---------- Locations + Route ---------- */
 function routeLocationCategory(l){return l?.category==='business'?'business':'saved'}
+function isClientHomeLocation(l){return String(l?.type||'').trim().toLowerCase()==='client housing'}
 function locationById(id){return state.locations.find(l=>l.id===id)||null}
 function transportationLocation(){
   const items=state.locations.filter(l=>l.address);
@@ -1595,27 +1596,48 @@ function renderRouteLocations(){
 }
 function renderRouteLocationEditor(l){
   if(!l)return;const e=document.getElementById('locationEditor');
-  e.innerHTML=`<section class="panel route-editor"><div class="title">Edit Location</div><div class="formgrid"><div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div><div class="field"><label>Category</label><select id="locCategory"><option value="business" ${routeLocationCategory(l)==='business'?'selected':''}>Business / Shawnee</option><option value="saved" ${routeLocationCategory(l)==='saved'?'selected':''}>Other Saved Location</option></select></div><div class="field route-address-field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div></div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes||'')}</textarea></div><div class="actions"><button class="btn" id="cancelLocationEdit">Cancel</button><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
+  const typeValue=['Client Housing','Office','Pickup / Drop-off','Other'].includes(l.type)?l.type:'Other';
+  e.innerHTML=`<section class="panel route-editor"><div class="title">Edit Location</div><div class="formgrid"><div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div><div class="field"><label>Category</label><select id="locCategory"><option value="business" ${routeLocationCategory(l)==='business'?'selected':''}>Business / Shawnee</option><option value="saved" ${routeLocationCategory(l)==='saved'?'selected':''}>Other Saved Location</option></select></div><div class="field"><label>Location Type</label><select id="locType"><option value="Client Housing" ${typeValue==='Client Housing'?'selected':''}>Client Housing</option><option value="Office" ${typeValue==='Office'?'selected':''}>Office</option><option value="Pickup / Drop-off" ${typeValue==='Pickup / Drop-off'?'selected':''}>Pickup / Drop-off</option><option value="Other" ${typeValue==='Other'?'selected':''}>Other</option></select></div><div class="field route-address-field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div></div><div class="muted" style="margin-top:8px">Locations marked <b>Client Housing</b> also appear in Route Planner → Client Homes, without becoming inspection properties.</div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes||'')}</textarea></div><div class="actions"><button class="btn" id="cancelLocationEdit">Cancel</button><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
   document.getElementById('cancelLocationEdit').onclick=()=>{if(!l.address&&l.name==='New Location')state.locations=state.locations.filter(x=>x.id!==l.id);editLocationId=null;renderRouteLocations()};
-  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();if(!l.address){alert('Enter the location address.');return}l.notes=document.getElementById('locNotes').value.trim();l.category=document.getElementById('locCategory').value==='business'?'business':'saved';await saveState();editLocationId=null;renderRouteLocations()};
+  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();if(!l.address){alert('Enter the location address.');return}l.notes=document.getElementById('locNotes').value.trim();l.category=document.getElementById('locCategory').value==='business'?'business':'saved';l.type=document.getElementById('locType').value||'Other';await saveState();editLocationId=null;renderRouteLocations()};
 }
 
 function renderRoutePicker(kind){
-  const view=document.getElementById('view');
-  const isClients=kind==='clients',rows=isClients?orderedProperties():orderedRouteLocations(),pickKind=isClients?'property':'location';
-  const currentIds=new Set(state.route.stops.filter(s=>s.kind===pickKind).map(s=>s.id));
+  const view=document.getElementById('view'),isClients=kind==='clients';
+  let rows=[];
+  if(isClients){
+    rows=[
+      ...orderedProperties().map(o=>({kind:'property',id:o.id,obj:o,title:o.address,subtitle:propertyNeedsChecks(o)?'House-check property':'House-check property • no required checks'})),
+      ...orderedRouteLocations().filter(isClientHomeLocation).map(o=>({kind:'location',id:o.id,obj:o,title:o.name||o.address,subtitle:`${o.address} • Client housing • no house check`}))
+    ];
+  }else{
+    rows=orderedRouteLocations().map(o=>({kind:'location',id:o.id,obj:o,title:o.name,subtitle:o.address}));
+  }
+  const currentKeys=new Set(state.route.stops.map(s=>`${s.kind}::${s.id}`));
   setModulePrevious(()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()},'Plan Route');
-  view.innerHTML=`<section class="panel"><div class="title">${isClients?'Client Homes':'Locations'}</div><div class="muted">${isClients?'Choose any house-check properties for this route. Select All is available when you need the full run.':'Choose business, pickup, drop-off, or other saved destinations.'}</div></section>
-  <section class="panel"><div class="actions route-select-actions"><button class="btn primary" id="selectAllRoute">Select All</button><button class="btn" id="clearRouteSelection">Clear Selection</button></div><div class="route-picker-list">${rows.map(o=>`<label class="route-choice"><input type="checkbox" data-pick-id="${esc(o.id)}" ${currentIds.has(o.id)?'checked':''}><span><b>${esc(isClients?o.address:o.name)}</b><small>${esc(isClients?(propertyNeedsChecks(o)?'House-check property':'Property • no required checks'):o.address)}</small></span></label>`).join('')||'<div class="muted">No addresses available.</div>'}</div><div class="route-picker-sticky"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerApply">Apply to Route</button></div></section>`;
+  view.innerHTML=`<section class="panel"><div class="title">${isClients?'Client Homes':'Locations'}</div><div class="muted">${isClients?'Choose house-check homes and permanent client housing. Non-inspection housing appears here for routing only and never becomes an inspection property.':'Choose business, pickup, drop-off, or other saved destinations.'}</div></section>
+  <section class="panel"><div class="actions route-select-actions"><button class="btn primary" id="selectAllRoute">Select All</button><button class="btn" id="clearRouteSelection">Clear Selection</button></div><div class="route-picker-list">${rows.map(r=>`<label class="route-choice"><input type="checkbox" data-pick-kind="${esc(r.kind)}" data-pick-id="${esc(r.id)}" ${currentKeys.has(`${r.kind}::${r.id}`)?'checked':''}><span><b>${esc(r.title)}</b><small>${esc(r.subtitle)}</small></span></label>`).join('')||'<div class="muted">No addresses available.</div>'}</div><div class="route-picker-sticky"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerApply">Apply to Route</button></div></section>`;
   const boxes=[...view.querySelectorAll('[data-pick-id]')];
   document.getElementById('selectAllRoute').onclick=()=>boxes.forEach(c=>c.checked=true);
   document.getElementById('clearRouteSelection').onclick=()=>boxes.forEach(c=>c.checked=false);
   document.getElementById('routePickerCancel').onclick=()=>{routePickerKind='';renderRouteCreate()};
   document.getElementById('routePickerApply').onclick=async()=>{
-    const selected=new Set(boxes.filter(c=>c.checked).map(c=>c.dataset.pickId));
-    const kept=state.route.stops.filter(s=>s.kind!==pickKind||selected.has(s.id));
-    const already=new Set(kept.filter(s=>s.kind===pickKind).map(s=>s.id));
-    for(const o of rows)if(selected.has(o.id)&&!already.has(o.id))kept.push(makeRouteStop(pickKind,o));
+    const selected=new Set(boxes.filter(c=>c.checked).map(c=>`${c.dataset.pickKind}::${c.dataset.pickId}`));
+    let kept;
+    if(isClients){
+      kept=state.route.stops.filter(s=>{
+        if(s.kind==='property')return selected.has(`property::${s.id}`);
+        if(s.kind==='location'&&isClientHomeLocation(locationById(s.id)))return selected.has(`location::${s.id}`);
+        return true;
+      });
+    }else{
+      kept=state.route.stops.filter(s=>s.kind!=='location'||selected.has(`location::${s.id}`));
+    }
+    const already=new Set(kept.map(s=>`${s.kind}::${s.id}`));
+    for(const r of rows){
+      const key=`${r.kind}::${r.id}`;
+      if(selected.has(key)&&!already.has(key))kept.push(makeRouteStop(r.kind,r.obj));
+    }
     state.route.stops=kept.filter(s=>stopAddress(s));resetRouteProgress();routePickerKind='';await saveState();renderRouteCreate();
   };
 }

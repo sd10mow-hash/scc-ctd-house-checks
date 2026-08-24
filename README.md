@@ -1,8 +1,12 @@
-# SCC-CTD House Checks v1.6.6
+# SCC-CTD House Checks v1.6.7
 
 GitHub-ready public PWA build.
 
-## v1.6.6 Google Maps handoff + one-stop loop
+## v1.6.7 Client Homes routing classification
+- Client Homes now combines inspection properties with permanent non-inspection client housing locations.
+- Locations marked `Client Housing` appear in the Client Homes selector but remain route-only and never enter inspections/reports.
+- Location editor now exposes Location Type so future non-inspection housing can be classified without code changes.
+
 
 - Replaces confusing four-stop "Batch Complete" workflow with one stop at a time.
 - Route-in-progress shows NEXT STOP, Google Maps, then ARRIVED • NEXT STOP.
