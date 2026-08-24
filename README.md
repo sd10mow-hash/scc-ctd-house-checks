@@ -1,21 +1,15 @@
-# SCC-CTD House Checks v1.6.5
+# SCC-CTD House Checks v1.6.6
 
 GitHub-ready public PWA build.
 
-## v1.6.5 Route loop navigation
+## v1.6.6 Google Maps handoff + one-stop loop
 
-- Starts and ends at the selected starting location.
-- Current Position captures GPS at route start so the loop can return to the exact starting point.
-- Google Maps launches in mobile-safe batches of up to four destinations (three waypoints plus a destination).
-- Large routes continue batch-by-batch without losing the planned order.
-
-- Removed the visible per-stop Remove/X control so route rows now keep only the aligned Up and Down arrows.
-- Removed the visible Smart Route control from Plan Route. Manual ordering remains the active planner behavior.
-- Starting Location > Other now shows only sensible starting anchors: Transportation Home, The Complex, and Main Business Office when those locations exist in the encrypted local database.
-- Turning Point houses and the 2.5 House remain available as route destinations, but no longer appear as starting-point choices.
-- Database schema remains 25. No client, property, inspection, report, PIN, or encrypted roster data is migrated or replaced by this UI cleanup.
-- Route-only operational addresses remain out of the public GitHub package.
-
+- Replaces confusing four-stop "Batch Complete" workflow with one stop at a time.
+- Route-in-progress shows NEXT STOP, Google Maps, then ARRIVED • NEXT STOP.
+- Final leg returns to the route's captured starting point.
+- On iPhone, navigation first targets the installed Google Maps app via Google's iOS URL scheme, with a Maps URL fallback.
+- Web fallback requests driving navigation with `dir_action=navigate`.
+- Database schema remains 25. No roster/client/property migration.
 
 ## v1.6.1 changes
 - Rebuilt Route Planner as a clean three-button hub: **Create Route**, **Business Locations**, and **Saved Locations**.

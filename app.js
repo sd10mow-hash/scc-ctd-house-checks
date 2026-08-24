@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.5';
+const VERSION='1.6.6';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1680,19 +1680,28 @@ function routeLoopPoints(){
   if(state.route.runStartAddress)points.push({label:`Return to ${state.route.runStartLabel||'Starting Location'}`,address:state.route.runStartAddress,stopNumber:0,isReturn:true});
   return points;
 }
-function routeBatchAt(index){
-  const points=routeLoopPoints(),start=Math.max(0,Number(index)||0),items=points.slice(start,start+4);
-  const origin=start===0?state.route.runStartAddress:(points[start-1]?.address||state.route.runStartAddress);
-  return {points,start,items,origin};
-}
-function routeMapsUrlForBatch(index){
-  const batch=routeBatchAt(index);if(!batch.items.length)return'';
-  const destination=batch.items[batch.items.length-1].address;
-  const params=new URLSearchParams({api:'1',destination,travelmode:'driving'});
-  if(batch.origin)params.set('origin',batch.origin);
-  const mids=batch.items.slice(0,-1).map(x=>x.address).filter(Boolean);
-  if(mids.length)params.set('waypoints',mids.join('|'));
+function routeGoogleWebUrl(address){
+  const params=new URLSearchParams({api:'1',destination:address,travelmode:'driving',dir_action:'navigate'});
   return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+function routeGoogleAppUrl(address){
+  const params=new URLSearchParams({daddr:address,directionsmode:'driving'});
+  return `comgooglemaps://?${params.toString()}`;
+}
+function openRouteGoogleMaps(address){
+  const appUrl=routeGoogleAppUrl(address),webUrl=routeGoogleWebUrl(address);
+  const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
+  if(ios){
+    const started=Date.now();
+    window.location.href=appUrl;
+    setTimeout(()=>{
+      if(document.visibilityState==='visible'&&Date.now()-started<2500){
+        window.location.href=webUrl;
+      }
+    },1100);
+    return;
+  }
+  window.location.href=webUrl;
 }
 
 function renderRouteCreate(){
@@ -1737,20 +1746,20 @@ function renderRouteRun(){
   let i=Math.max(0,Math.min(Number(state.route.runIndex)||0,points.length));state.route.runIndex=i;
   setModulePrevious(()=>setRouteView('create'),'Plan Route');
   if(i>=points.length){
-    view.innerHTML=`<section class="panel route-complete"><div class="route-complete-icon">✓</div><div class="title">Route Loop Complete</div><div class="muted">All ${stops.length} planned destinations are complete and the route has returned to ${esc(state.route.runStartLabel||'the starting location')}.</div><div class="actions"><button class="btn" id="routeRestart">Run Again</button><button class="btn primary" id="routeBackPlan">Back to Plan</button></div></section>`;
+    view.innerHTML=`<section class="panel route-complete"><div class="route-complete-icon">✓</div><div class="title">Route Loop Complete</div><div class="muted">All ${stops.length} planned destinations are complete and you returned to ${esc(state.route.runStartLabel||'the starting location')}.</div><div class="actions"><button class="btn" id="routeRestart">Run Again</button><button class="btn primary" id="routeBackPlan">Back to Plan</button></div></section>`;
     document.getElementById('routeRestart').onclick=async()=>{state.route.runIndex=0;await saveState();renderRouteRun()};
     document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');return;
   }
-  const batch=routeBatchAt(i),batchSize=batch.items.length,totalBatches=Math.ceil(points.length/4),batchNo=Math.floor(i/4)+1,url=routeMapsUrlForBatch(i),pct=Math.round((i/points.length)*100);
-  const list=batch.items.map(p=>`<div class="route-run-upnext ${p.isReturn?'route-return-leg':''}"><b>${p.isReturn?'↩':p.stopNumber}</b><span>${esc(p.label)}</span></div>`).join('');
-  const nextIndex=i+batchSize,nextBatch=nextIndex<points.length?routeBatchAt(nextIndex):null;
-  view.innerHTML=`<section class="panel"><div class="route-run-top"><div><div class="title">Route Loop</div><div class="muted">Navigation batch ${batchNo} of ${totalBatches}</div></div><div class="route-run-percent">${pct}%</div></div><div class="progress"><div style="width:${pct}%"></div></div></section>
-  <section class="panel route-next-card"><div class="eyebrow">GOOGLE MAPS BATCH</div><div class="route-next-address">${batch.items.some(x=>x.isReturn)?'Finish this batch and return to the starting location.':`Navigate the next ${batchSize} planned stop${batchSize===1?'':'s'} in order.`}</div><div class="route-batch-list">${list}</div><a class="btn primary route-open-nav" href="${esc(url)}" target="_blank" rel="noopener">🧭 OPEN GOOGLE MAPS</a><button class="btn route-complete-stop" id="routeCompleteBatch">✓ BATCH COMPLETE</button></section>
-  ${nextBatch?`<section class="panel"><div class="title">After This Batch</div><div class="muted">Return to SCC-CTD and tap Batch Complete. The next Google Maps batch will continue from the last stop.</div></section>`:''}
-  <section class="route-run-actions"><button class="btn" id="routeBackPlan">Edit Plan</button>${i>0?'<button class="btn" id="routePreviousBatch">Previous Batch</button>':''}</section>`;
-  document.getElementById('routeCompleteBatch').onclick=async()=>{state.route.runIndex=Math.min(points.length,i+batchSize);await saveState();renderRouteRun()};
+  const point=points[i],pct=Math.round((i/points.length)*100),isReturn=!!point.isReturn;
+  const upcoming=points.slice(i+1,i+4);
+  view.innerHTML=`<section class="panel"><div class="route-run-top"><div><div class="title">Route Loop</div><div class="muted">${isReturn?'Return leg':`Stop ${i+1} of ${stops.length}`}</div></div><div class="route-run-percent">${pct}%</div></div><div class="progress"><div style="width:${pct}%"></div></div></section>
+  <section class="panel route-next-card"><div class="eyebrow">${isReturn?'FINAL LEG':'NEXT STOP'}</div><div class="route-next-address">${esc(point.label)}</div><div class="muted route-next-full-address">${esc(point.address)}</div><button class="btn primary route-open-nav" id="routeOpenGoogle">🧭 OPEN GOOGLE MAPS</button><button class="btn route-complete-stop" id="routeArrivedNext">${isReturn?'✓ BACK AT START • FINISH':'✓ ARRIVED • NEXT STOP'}</button></section>
+  ${upcoming.length?`<section class="panel"><div class="title">Coming Up</div><div class="route-batch-list">${upcoming.map(p=>`<div class="route-run-upnext ${p.isReturn?'route-return-leg':''}"><b>${p.isReturn?'↩':p.stopNumber}</b><span>${esc(p.label)}</span></div>`).join('')}</div></section>`:''}
+  <section class="route-run-actions"><button class="btn" id="routeBackPlan">Edit Plan</button>${i>0?'<button class="btn" id="routePreviousStop">Previous Stop</button>':''}</section>`;
+  document.getElementById('routeOpenGoogle').onclick=()=>openRouteGoogleMaps(point.address);
+  document.getElementById('routeArrivedNext').onclick=async()=>{state.route.runIndex=Math.min(points.length,i+1);await saveState();renderRouteRun()};
   document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');
-  if(document.getElementById('routePreviousBatch'))document.getElementById('routePreviousBatch').onclick=async()=>{state.route.runIndex=Math.max(0,i-4);await saveState();renderRouteRun()};
+  if(document.getElementById('routePreviousStop'))document.getElementById('routePreviousStop').onclick=async()=>{state.route.runIndex=Math.max(0,i-1);await saveState();renderRouteRun()};
 }
 
 function renderRoute(){
