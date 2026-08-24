@@ -517,3 +517,12 @@ a{color:var(--accent)}
 /* v1.4.5 per-device reporter identity */
 .user-profile-setup{max-width:620px}
 .user-profile-setup .formgrid{margin-top:10px}
+
+/* v1.4.6 unified client search */
+.client-search-card{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.client-search-main{display:grid;gap:4px;min-width:0}
+.client-search-actions{justify-content:flex-end}
+@media(max-width:700px){
+  .client-search-card{display:grid}
+  .client-search-actions{justify-content:flex-start}
+}

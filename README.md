@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.4.5
+# SCC-CTD House Checks v1.4.6
 
 GitHub-ready public PWA build.
 
-## v1.4.5 changes
+## v1.4.6 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,9 +57,18 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.4.5 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.4.6 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
 - Import preserves the recipient phone's own name, role, work email, report-text number, and local PIN.
 - The same numeric PIN may exist on two phones because PINs are local encryption credentials, not centralized user accounts.
+
+
+V1.4.6 UNIFIED CLIENT SEARCH
+- Removed the separate Client Profiles navigation item.
+- 3×3 Client Search is now the single client lookup and profile hub.
+- Search includes active and inactive client records.
+- Each result has View Client and Edit Client.
+- Edit Client requires the app PIN and includes name, phone, inspection requirement, work schedule, school schedule, important information, and permanent profile note.
+- Active client results can jump directly to Open House.

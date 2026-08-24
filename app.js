@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.5';
+const VERSION='1.4.6';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounselingcenter.org';
@@ -98,7 +98,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:8,
+    schemaVersion:9,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -224,7 +224,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=8;
+  d.schemaVersion=9;
   return d;
 }
 function getCheck(pid,room){
@@ -327,7 +327,7 @@ async function setupDatabase(pin,reportNumber,reporterName,reporterRole,userWork
   state.settings.reporterRole=String(reporterRole||'').trim();
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:8});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:9});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -516,7 +516,7 @@ function renderShell(){
 }
 function drawNav(){
   const nav=document.getElementById('nav');
-  const items=[['tonight','Tonight'],['search','Client Search'],['clients','Client Profiles'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
+  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
   nav.innerHTML=items.map(([k,l])=>`<button data-nav="${k}" class="${screen===k?'active':''}">${l}</button>`).join('');
   nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{
     hideFullNames();
@@ -532,7 +532,6 @@ function render(){
   drawNav();
   if(activePropertyId)return renderHouse();
   if(screen==='search')return renderClientSearch();
-  if(screen==='clients')return renderClientProfiles();
   if(screen==='route')return renderRoute();
   if(screen==='report')return renderReport();
   if(screen==='history')return renderHistory();
@@ -847,65 +846,93 @@ async function editClientProfile(item){
     await saveState();wrap.remove();renderClientProfiles();
   };
 }
-function renderClientProfiles(){
-  const view=document.getElementById('view'),q=clientSearchQuery,records=allClientProfileRecords().filter(x=>profileSearchMatches(x,q));
-  view.innerHTML=`<section class="panel">
-    <div class="titlebar"><div><div class="title">Client Profiles</div><div class="muted">Dedicated active/inactive client records. Search by the 3×3 name key, then view work, school, inspection requirements, and other important information.</div></div>${nameRevealButton()}</div>
-    <div class="searchbar"><input id="profileSearch" autocomplete="off" placeholder="3×3 search, e.g. Bra Wal" value="${esc(q)}"><button class="btn" id="clearProfileSearch">Clear</button></div>
-  </section>
-  <section class="profile-list">${records.map((x,i)=>`<article class="card profile-card" data-profile-row="${i}">
-    <div><div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
-    <div class="meta">${x.kind==='active'?`${esc(x.property.address)} • Room ${esc(x.record.room)}`:`INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}`}</div>
-    <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div></div>
-    <div class="actions"><button class="btn" data-view-profile="${i}">View</button><button class="btn primary" data-edit-profile="${i}">Edit</button></div>
-  </article>`).join('')||'<div class="panel"><div class="muted">No matching client profiles.</div></div>'}</section>`;
-  const input=document.getElementById('profileSearch');
-  input.oninput=()=>{clientSearchQuery=input.value;renderClientProfiles();const a=document.getElementById('profileSearch');a?.focus();a?.setSelectionRange(a.value.length,a.value.length)};
-  document.getElementById('clearProfileSearch').onclick=()=>{clientSearchQuery='';renderClientProfiles()};
-  const nameToggle=document.getElementById('toggleNames');
-  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientProfiles()};
-  view.querySelectorAll('[data-view-profile]').forEach(b=>b.onclick=()=>{const x=records[+b.dataset.viewProfile];if(!x)return;x.kind==='active'?showClientProfile(x.property,x.record):inactiveProfileModal(x.record)});
-  view.querySelectorAll('[data-edit-profile]').forEach(b=>b.onclick=()=>{const x=records[+b.dataset.editProfile];if(x)editClientProfile(x)});
-}
-
-/* ---------- 3x3 Client Search ---------- */
-function clientSearchResults(query){
-  const q=String(query||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
-  if(q.length<3)return [];
+/* ---------- 3x3 Client Search / Unified Client Hub ---------- */
+function clientHubRecords(){
   const out=[];
   for(const p of state.properties){
     for(const r of p.rooms){
-      if(r.type!=='client')continue;
-      const key=clientSearchKey(r.name);
-      if(key.includes(q) || q.includes(key)){
-        out.push({property:p,room:r,key});
-      }
+      if(r.type==='client')out.push({kind:'active',property:p,record:r});
     }
   }
+  for(const c of state.inactiveClients||[])out.push({kind:'inactive',property:null,record:c});
   return out;
 }
+function clientHubMatches(item,query){
+  const q=String(query||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  if(q.length<3)return false;
+  const key=clientSearchKey(item.record.name);
+  return key.includes(q)||q.includes(key);
+}
 function renderClientSearch(){
-  const view=document.getElementById('view'),results=clientSearchResults(clientSearchQuery);
+  const view=document.getElementById('view');
+  const compact=String(clientSearchQuery||'').replace(/[^a-z0-9]/gi,'');
+  const results=compact.length<3?[]:clientHubRecords().filter(x=>clientHubMatches(x,clientSearchQuery));
+
   view.innerHTML=`<section class="panel">
-    <div class="titlebar"><div><div class="title">3×3 Client Search</div><div class="muted">Search using the first 3 letters of the first name + first 3 letters of the last name. Example: Bra Wal or BraWal.</div></div>${nameRevealButton()}</div>
+    <div class="titlebar">
+      <div>
+        <div class="title">3×3 Client Search</div>
+        <div class="muted">One client search for everything. Search the first 3 letters of the first name + first 3 letters of the last name.</div>
+      </div>
+      ${nameRevealButton()}
+    </div>
     <div class="searchbar"><input id="clientSearch" autocomplete="off" placeholder="e.g. Bra Wal" value="${esc(clientSearchQuery)}"><button class="btn" id="clearSearch">Clear</button></div>
-    <div class="privacy-hint">Full names are hidden by default. “Show All Names” is temporary and automatically hides again.</div>
+    <div class="privacy-hint">Full names stay hidden by default. Open a client record to view schedules, inspection requirements, and other profile information.</div>
   </section>
+
   <section class="search-results">${
-    clientSearchQuery.replace(/[^a-z0-9]/gi,'').length<3
+    compact.length<3
       ? '<div class="panel"><div class="muted">Enter at least 3 letters to search.</div></div>'
       : results.length
-        ? results.map(x=>`<article class="card search-result"><div><div class="name ${x.room.color||'none'}">${esc(displayClientName(x.room.name))}</div><div class="meta">${esc(x.property.address)} • Room ${esc(x.room.room)}</div></div><button class="btn primary" data-findhouse="${esc(x.property.id)}">Open House</button></article>`).join('')
+        ? results.map((x,i)=>`<article class="card search-result client-search-card">
+            <div class="client-search-main">
+              <div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
+              <div class="meta">${x.kind==='active'
+                ? `${esc(x.property.address)} • Room ${esc(x.record.room)}`
+                : `INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}${x.record.previousRoom?` • Room ${esc(x.record.previousRoom)}`:''}`}</div>
+              <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div>
+            </div>
+            <div class="actions client-search-actions">
+              <button class="btn" data-viewclient="${i}">View Client</button>
+              <button class="btn primary" data-editclient="${i}">Edit Client</button>
+              ${x.kind==='active'?`<button class="btn" data-findhouse="${esc(x.property.id)}">Open House</button>`:''}
+            </div>
+          </article>`).join('')
         : '<div class="panel"><div class="muted">No matching client found.</div></div>'
   }</section>`;
+
   const input=document.getElementById('clientSearch');
-  input.oninput=()=>{clientSearchQuery=input.value;renderClientSearch();const again=document.getElementById('clientSearch');again?.focus();again?.setSelectionRange(again.value.length,again.value.length)};
+  input.oninput=()=>{
+    clientSearchQuery=input.value;
+    renderClientSearch();
+    const again=document.getElementById('clientSearch');
+    again?.focus();
+    again?.setSelectionRange(again.value.length,again.value.length);
+  };
   document.getElementById('clearSearch').onclick=()=>{clientSearchQuery='';renderClientSearch()};
+
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientSearch()};
-  view.querySelectorAll('[data-findhouse]').forEach(b=>b.onclick=()=>{hideFullNames();activePropertyId=b.dataset.findhouse;revealCode=false;render()});
-}
 
+  view.querySelectorAll('[data-viewclient]').forEach(b=>b.onclick=()=>{
+    const x=results[+b.dataset.viewclient];
+    if(!x)return;
+    x.kind==='active'?showClientProfile(x.property,x.record):inactiveProfileModal(x.record);
+  });
+
+  view.querySelectorAll('[data-editclient]').forEach(b=>b.onclick=()=>{
+    const x=results[+b.dataset.editclient];
+    if(x)editClientProfile(x);
+  });
+
+  view.querySelectorAll('[data-findhouse]').forEach(b=>b.onclick=()=>{
+    hideFullNames();
+    activePropertyId=b.dataset.findhouse;
+    revealCode=false;
+    screen='tonight';
+    render();
+  });
+}
 /* ---------- Locations + Route ---------- */
 function renderLocations(){
   const view=document.getElementById('view');
@@ -1285,7 +1312,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:8,
+    schemaVersion:9,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
