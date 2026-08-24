@@ -1,6 +1,21 @@
-# SCC-CTD House Checks v1.6.1
+# SCC-CTD House Checks v1.6.2
 
 GitHub-ready public PWA build.
+
+## v1.6.2 Route Planner rebuild
+
+- Rebuilt Route Planner around three clean entry points: Plan Route, Locations, and Saved Routes.
+- Plan Route now keeps start point, stop selection, ordering, save/load, and route execution in one coherent workspace.
+- Client Homes picker supports individual selection, Select All, Clear Selection, and Apply to Route.
+- Locations picker handles route-only business, pickup, drop-off, and saved destinations without creating inspection records.
+- Full-width route rows keep the Up, Down, and Remove controls perfectly aligned.
+- Transportation Home is promoted as a one-tap starting point when it exists in the encrypted local location database.
+- Smart Route preserves manual control and uses coordinate-aware nearest-neighbor ordering when coordinates are available, with a conservative offline street-group fallback otherwise.
+- Saved routes load back into the planner without touching clients, properties, reports, or locations. Saving the same route name can intentionally replace that saved configuration.
+- Added Route in Progress mode so navigation runs one stop at a time. This avoids mobile multi-waypoint limits and always allows the phone's mapping app to navigate from the driver's actual current position after the first stop.
+- Route progress is saved locally so returning to the app does not lose the current stop.
+- Route-only operational addresses remain out of the public GitHub package.
+
 
 ## v1.6.1 changes
 - Rebuilt Route Planner as a clean three-button hub: **Create Route**, **Business Locations**, and **Saved Locations**.

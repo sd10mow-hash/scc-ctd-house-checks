@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.1';
+const VERSION='1.6.2';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -93,11 +93,11 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:24,
+    schemaVersion:25,
     properties:[],
     inactiveClients:[],
     locations:[],
-    route:{stops:[],startMode:'current',startLocationId:''},
+    route:{stops:[],startMode:'current',startLocationId:'',runIndex:0},
     savedRoutes:[],
     settings:{
       reporterName:'',
@@ -204,7 +204,8 @@ function normalizeState(raw){
   d.route={
     stops:Array.isArray(oldRoute.stops)?oldRoute.stops.map(x=>deepClone(x)):[],
     startMode:oldRoute.startMode==='location'?'location':'current',
-    startLocationId:String(oldRoute.startLocationId||legacyBaseId||'')
+    startLocationId:String(oldRoute.startLocationId||legacyBaseId||''),
+    runIndex:Math.max(0,Number(oldRoute.runIndex)||0)
   };
   if(d.route.startMode==='location'&&!d.locations.some(l=>l.id===d.route.startLocationId)){
     d.route.startMode='current';d.route.startLocationId='';
@@ -259,7 +260,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=23;
+  d.schemaVersion=25;
   return d;
 }
 function getCheck(pid,room){
@@ -362,7 +363,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:24});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:25});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -1496,9 +1497,19 @@ function renderClientSearch(){
 }
 /* ---------- Locations + Route ---------- */
 function routeLocationCategory(l){return l?.category==='business'?'business':'saved'}
-function routeLocationTitle(category){return category==='business'?'Business Locations':'Saved Locations'}
-function routeLocationList(category){return state.locations.filter(l=>routeLocationCategory(l)===category)}
 function locationById(id){return state.locations.find(l=>l.id===id)||null}
+function transportationLocation(){
+  const items=state.locations.filter(l=>l.address);
+  return items.find(l=>l.isBase&&/transport/i.test(l.name||''))||items.find(l=>/transport/i.test(l.name||''))||items.find(l=>l.isBase)||null;
+}
+function orderedRouteLocations(){
+  const base=transportationLocation();
+  return [...state.locations].filter(l=>l.address).sort((a,b)=>{
+    if(base&&a.id===base.id)return-1;if(base&&b.id===base.id)return 1;
+    const ac=routeLocationCategory(a)==='business'?0:1,bc=routeLocationCategory(b)==='business'?0:1;
+    return ac-bc||String(a.name).localeCompare(String(b.name));
+  });
+}
 function currentStartLocation(){return state.route.startMode==='location'?locationById(state.route.startLocationId):null}
 function routeStartLabel(){const l=currentStartLocation();return l?`${l.name} • ${l.address}`:'Current Position'}
 function makeRouteStop(kind,obj){
@@ -1512,139 +1523,187 @@ function stopObj(s){
   if(s.kind==='custom')return s;
   return null;
 }
-function stopLabel(s){const o=stopObj(s);if(!o)return'Missing stop';if(s.kind==='property')return o.address;if(s.kind==='custom')return o.name&&o.name!=='Inserted Address'?`${o.name} • ${o.address}`:o.address;return `${o.name} • ${o.address}`}
+function stopLabel(s){
+  const o=stopObj(s);if(!o)return'Missing stop';
+  if(s.kind==='property')return o.address;
+  if(s.kind==='custom')return o.name&&o.name!=='Inserted Address'?`${o.name} • ${o.address}`:o.address;
+  return `${o.name} • ${o.address}`;
+}
 function stopAddress(s){return stopObj(s)?.address||''}
 function validRouteStops(list=state.route.stops){return (list||[]).filter(s=>stopAddress(s))}
 function routeStopExists(kind,id){return state.route.stops.some(s=>s.kind===kind&&s.id===id)}
-function smartRouteCompare(a,b){
-  const A=addressParts(stopAddress(a)),B=addressParts(stopAddress(b));
-  if(A.street!==B.street)return A.street.localeCompare(B.street);
-  return A.number-B.number;
+function resetRouteProgress(){state.route.runIndex=0}
+function routeCoords(s){
+  const o=stopObj(s),lat=Number(o?.lat),lon=Number(o?.lon??o?.lng??o?.long);
+  return Number.isFinite(lat)&&Number.isFinite(lon)?{lat,lon}:null;
+}
+function dist2(a,b){const dx=a.lat-b.lat,dy=(a.lon-b.lon)*Math.cos((a.lat+b.lat)*Math.PI/360);return dx*dx+dy*dy}
+function smartRouteStops(){
+  const source=validRouteStops();if(source.length<2)return source;
+  const withCoords=source.every(s=>routeCoords(s));
+  let start=currentStartLocation();
+  const startCoords=start?routeCoords({kind:'location',id:start.id}):null;
+  if(withCoords&&startCoords){
+    const remaining=[...source],out=[];let cur=startCoords;
+    while(remaining.length){let best=0,bestD=Infinity;for(let i=0;i<remaining.length;i++){const d=dist2(cur,routeCoords(remaining[i]));if(d<bestD){best=i;bestD=d}}const next=remaining.splice(best,1)[0];out.push(next);cur=routeCoords(next)}
+    return out;
+  }
+  // Offline fallback: preserve the driver's street-group order, but clean up house numbers within each street.
+  const groups=[],byStreet=new Map();
+  for(const stop of source){const a=addressParts(stopAddress(stop)),key=a.street||stopAddress(stop).toLowerCase();if(!byStreet.has(key)){const g={key,items:[]};byStreet.set(key,g);groups.push(g)}byStreet.get(key).items.push(stop)}
+  for(const g of groups)g.items.sort((a,b)=>addressParts(stopAddress(a)).number-addressParts(stopAddress(b)).number);
+  return groups.flatMap(g=>g.items);
 }
 function setRouteView(view){routePlannerView=view;routePickerKind='';routePickerDraft=null;routeInlineMode='';renderRoute()}
+function routeHasWork(){return validRouteStops().length>0}
 
 function renderRouteMenu(){
-  const view=document.getElementById('view');
+  const view=document.getElementById('view'),count=validRouteStops().length;
   setModulePrevious(goHome,'Previous');
-  view.innerHTML=`<section class="panel"><div class="title">Route Planner</div><div class="muted">Build routes, keep route-only destinations separate from inspection properties, and hand the finished order to navigation.</div></section>
-  <section class="route-hub">
-    <button class="route-hub-button primary" id="routeCreate"><span>🧭</span><b>CREATE ROUTE</b></button>
-    <button class="route-hub-button" id="routeBusiness"><span>🏢</span><b>BUSINESS LOCATIONS</b></button>
-    <button class="route-hub-button" id="routeSaved"><span>📌</span><b>SAVED LOCATIONS</b></button>
+  view.innerHTML=`<section class="panel route-welcome"><div class="title">Route Planner</div><div class="muted">Plan the stops here. Navigation stays simple and works one stop at a time when you are on the road.</div></section>
+  <section class="route-hub route-hub-simple">
+    <button class="route-hub-button primary" id="routePlan"><span>🧭</span><span><b>PLAN ROUTE</b><small>${count?`${count} stop${count===1?'':'s'} currently in the planner`:'Build or continue a route'}</small></span></button>
+    <button class="route-hub-button" id="routeLocations"><span>📍</span><span><b>LOCATIONS</b><small>Business, pickup and drop-off destinations</small></span></button>
+    <button class="route-hub-button" id="routeSavedRoutes"><span>🗂️</span><span><b>SAVED ROUTES</b><small>Load or manage route configurations</small></span></button>
   </section>`;
-  document.getElementById('routeCreate').onclick=()=>setRouteView('create');
-  document.getElementById('routeBusiness').onclick=()=>setRouteView('business');
-  document.getElementById('routeSaved').onclick=()=>setRouteView('saved');
+  document.getElementById('routePlan').onclick=()=>setRouteView('create');
+  document.getElementById('routeLocations').onclick=()=>setRouteView('locations');
+  document.getElementById('routeSavedRoutes').onclick=()=>setRouteView('savedroutes');
 }
 
-function renderRouteLocations(category){
-  const view=document.getElementById('view'),items=routeLocationList(category);
+function renderRouteLocations(){
+  const view=document.getElementById('view'),business=state.locations.filter(l=>routeLocationCategory(l)==='business'),saved=state.locations.filter(l=>routeLocationCategory(l)==='saved');
   setModulePrevious(()=>setRouteView('menu'),'Route Planner');
-  view.innerHTML=`<section class="panel"><div class="title">${routeLocationTitle(category)}</div><div class="muted">These destinations are route-only. They do not create beds, clients, inspections, or report rows.</div></section>
-  <section class="grid">${items.map(l=>`<article class="card"><h3>${esc(l.name)}</h3><div class="meta">${esc(l.address||'Address not entered')}</div>${l.notes?`<div class="muted">${esc(l.notes)}</div>`:''}<div class="actions"><button class="btn primary" data-addloc="${esc(l.id)}">Add to Route</button><button class="btn" data-editloc="${esc(l.id)}">Edit</button><a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}">Map</a><button class="btn red" data-delloc="${esc(l.id)}">Remove</button></div></article>`).join('')||'<div class="muted">No locations saved in this section yet.</div>'}</section>
-  <div class="actions"><button class="btn primary" id="addRouteLocation">+ Add ${category==='business'?'Business':'Saved'} Location</button></div><div id="locationEditor"></div>`;
-  view.querySelectorAll('[data-addloc]').forEach(b=>b.onclick=async()=>{const l=locationById(b.dataset.addloc);if(!l)return;if(!routeStopExists('location',l.id))state.route.stops.push(makeRouteStop('location',l));await saveState();alert('Added to the current route.');});
-  view.querySelectorAll('[data-editloc]').forEach(b=>b.onclick=()=>{editLocationId=b.dataset.editloc;renderRouteLocations(category)});
-  view.querySelectorAll('[data-delloc]').forEach(b=>b.onclick=async()=>{const id=b.dataset.delloc;if(!confirm('Remove this route location?'))return;state.locations=state.locations.filter(l=>l.id!==id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='location'&&s.id===id));if(state.route.startLocationId===id){state.route.startMode='current';state.route.startLocationId=''}await saveState();renderRouteLocations(category)});
-  document.getElementById('addRouteLocation').onclick=()=>{const l={id:uuid(),name:'New Location',address:'',type:'Other',phone:'',notes:'',isBase:false,category};state.locations.push(l);editLocationId=l.id;renderRouteLocations(category)};
-  if(editLocationId)renderRouteLocationEditor(locationById(editLocationId),category);
+  const cards=(items)=>items.map(l=>`<article class="card route-location-card"><div class="route-location-copy"><h3>${esc(l.name)}</h3><div class="meta">${esc(l.address||'Address not entered')}</div>${l.notes?`<div class="muted">${esc(l.notes)}</div>`:''}</div><div class="actions"><button class="btn primary" data-addloc="${esc(l.id)}">Add to Route</button><a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}">Map</a><button class="btn" data-editloc="${esc(l.id)}">Edit</button><button class="btn red" data-delloc="${esc(l.id)}">Remove</button></div></article>`).join('')||'<div class="muted">None saved yet.</div>';
+  view.innerHTML=`<section class="panel"><div class="route-order-head"><div><div class="title">Locations</div><div class="muted">Route-only destinations stay separate from house-check properties.</div></div><button class="btn primary" id="addRouteLocation">+ Add Location</button></div></section>
+  <section class="panel"><div class="title route-section-title">Business & Shawnee Locations</div><div class="history-list">${cards(business)}</div></section>
+  <section class="panel"><div class="title route-section-title">Other Saved Locations</div><div class="history-list">${cards(saved)}</div></section>
+  <div id="locationEditor"></div>`;
+  view.querySelectorAll('[data-addloc]').forEach(b=>b.onclick=async()=>{const l=locationById(b.dataset.addloc);if(!l)return;if(!routeStopExists('location',l.id)){state.route.stops.push(makeRouteStop('location',l));resetRouteProgress();await saveState()}alert('Added to the current route.');});
+  view.querySelectorAll('[data-editloc]').forEach(b=>b.onclick=()=>{editLocationId=b.dataset.editloc;renderRouteLocations()});
+  view.querySelectorAll('[data-delloc]').forEach(b=>b.onclick=async()=>{const id=b.dataset.delloc;if(!confirm('Remove this route location?'))return;state.locations=state.locations.filter(l=>l.id!==id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='location'&&s.id===id));if(state.route.startLocationId===id){state.route.startMode='current';state.route.startLocationId=''}resetRouteProgress();await saveState();renderRouteLocations()});
+  document.getElementById('addRouteLocation').onclick=()=>{const l={id:uuid(),name:'New Location',address:'',type:'Other',phone:'',notes:'',isBase:false,category:'saved'};state.locations.push(l);editLocationId=l.id;renderRouteLocations()};
+  if(editLocationId)renderRouteLocationEditor(locationById(editLocationId));
 }
-function renderRouteLocationEditor(l,category){
+function renderRouteLocationEditor(l){
   if(!l)return;const e=document.getElementById('locationEditor');
-  e.innerHTML=`<section class="panel"><div class="title">Edit Location</div><div class="formgrid"><div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div><div class="field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div></div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes||'')}</textarea></div><div class="actions"><button class="btn" id="cancelLocationEdit">Cancel</button><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
-  document.getElementById('cancelLocationEdit').onclick=()=>{editLocationId=null;renderRouteLocations(category)};
-  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();l.notes=document.getElementById('locNotes').value.trim();l.category=category;await saveState();editLocationId=null;renderRouteLocations(category)};
+  e.innerHTML=`<section class="panel route-editor"><div class="title">Edit Location</div><div class="formgrid"><div class="field"><label>Name</label><input id="locName" value="${esc(l.name)}"></div><div class="field"><label>Category</label><select id="locCategory"><option value="business" ${routeLocationCategory(l)==='business'?'selected':''}>Business / Shawnee</option><option value="saved" ${routeLocationCategory(l)==='saved'?'selected':''}>Other Saved Location</option></select></div><div class="field route-address-field"><label>Address</label><input id="locAddress" value="${esc(l.address)}"></div></div><div class="field" style="margin-top:8px"><label>Notes</label><textarea id="locNotes">${esc(l.notes||'')}</textarea></div><div class="actions"><button class="btn" id="cancelLocationEdit">Cancel</button><button class="btn primary" id="saveLocation">Save Location</button></div></section>`;
+  document.getElementById('cancelLocationEdit').onclick=()=>{if(!l.address&&l.name==='New Location')state.locations=state.locations.filter(x=>x.id!==l.id);editLocationId=null;renderRouteLocations()};
+  document.getElementById('saveLocation').onclick=async()=>{l.name=document.getElementById('locName').value.trim()||'Unnamed Location';l.address=document.getElementById('locAddress').value.trim();if(!l.address){alert('Enter the location address.');return}l.notes=document.getElementById('locNotes').value.trim();l.category=document.getElementById('locCategory').value==='business'?'business':'saved';await saveState();editLocationId=null;renderRouteLocations()};
 }
 
 function renderRoutePicker(kind){
   const view=document.getElementById('view');
-  if(!routePickerDraft)routePickerDraft=deepClone(state.route.stops);
-  const checked=(k,id)=>routePickerDraft.some(s=>s.kind===k&&s.id===id);
-  const isClients=kind==='clients';
-  const rows=isClients?orderedProperties():state.locations;
-  setModulePrevious(()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()},'Create Route');
-  view.innerHTML=`<section class="panel"><div class="title">${isClients?'Client Homes':'Route Locations'}</div><div class="muted">${isClients?'Select any inspection-property addresses you want. You can select every house at once.':'Choose business or saved destinations to add to this route.'}</div></section>
-  <section class="panel"><div class="actions route-select-actions"><button class="btn" id="selectAllRoute">Select All</button><button class="btn" id="clearRouteSelection">Clear</button></div><div class="route-picker-list">${rows.map(o=>`<label class="route-choice"><input type="checkbox" data-pick-kind="${isClients?'property':'location'}" data-pick-id="${esc(o.id)}" ${checked(isClients?'property':'location',o.id)?'checked':''}><span><b>${esc(isClients?o.address:o.name)}</b><small>${esc(isClients?(propertyNeedsChecks(o)?'Inspection property':'Property • no required checks'):o.address)}</small></span></label>`).join('')||'<div class="muted">No addresses available.</div>'}</div><div class="actions"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerApply">Apply</button></div></section>`;
-  const boxes=[...view.querySelectorAll('[data-pick-kind]')];
-  const sync=()=>{const selected=routePickerDraft.filter(s=>s.kind==='custom');for(const c of boxes)if(c.checked)selected.push({kind:c.dataset.pickKind,id:c.dataset.pickId});const untouched=state.route.stops.filter(s=>!boxes.some(c=>c.dataset.pickKind===s.kind&&c.dataset.pickId===s.id)&&s.kind!=='custom');routePickerDraft=[...untouched,...selected]};
-  boxes.forEach(c=>c.onchange=sync);
-  document.getElementById('selectAllRoute').onclick=()=>{boxes.forEach(c=>c.checked=true);sync()};
-  document.getElementById('clearRouteSelection').onclick=()=>{boxes.forEach(c=>c.checked=false);sync()};
-  document.getElementById('routePickerCancel').onclick=()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()};
-  document.getElementById('routePickerApply').onclick=async()=>{sync();state.route.stops=routePickerDraft.filter(s=>stopAddress(s));routePickerKind='';routePickerDraft=null;await saveState();renderRouteCreate()};
+  const isClients=kind==='clients',rows=isClients?orderedProperties():orderedRouteLocations(),pickKind=isClients?'property':'location';
+  const currentIds=new Set(state.route.stops.filter(s=>s.kind===pickKind).map(s=>s.id));
+  setModulePrevious(()=>{routePickerKind='';routePickerDraft=null;renderRouteCreate()},'Plan Route');
+  view.innerHTML=`<section class="panel"><div class="title">${isClients?'Client Homes':'Locations'}</div><div class="muted">${isClients?'Choose any house-check properties for this route. Select All is available when you need the full run.':'Choose business, pickup, drop-off, or other saved destinations.'}</div></section>
+  <section class="panel"><div class="actions route-select-actions"><button class="btn primary" id="selectAllRoute">Select All</button><button class="btn" id="clearRouteSelection">Clear Selection</button></div><div class="route-picker-list">${rows.map(o=>`<label class="route-choice"><input type="checkbox" data-pick-id="${esc(o.id)}" ${currentIds.has(o.id)?'checked':''}><span><b>${esc(isClients?o.address:o.name)}</b><small>${esc(isClients?(propertyNeedsChecks(o)?'House-check property':'Property • no required checks'):o.address)}</small></span></label>`).join('')||'<div class="muted">No addresses available.</div>'}</div><div class="route-picker-sticky"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerApply">Apply to Route</button></div></section>`;
+  const boxes=[...view.querySelectorAll('[data-pick-id]')];
+  document.getElementById('selectAllRoute').onclick=()=>boxes.forEach(c=>c.checked=true);
+  document.getElementById('clearRouteSelection').onclick=()=>boxes.forEach(c=>c.checked=false);
+  document.getElementById('routePickerCancel').onclick=()=>{routePickerKind='';renderRouteCreate()};
+  document.getElementById('routePickerApply').onclick=async()=>{
+    const selected=new Set(boxes.filter(c=>c.checked).map(c=>c.dataset.pickId));
+    const kept=state.route.stops.filter(s=>s.kind!==pickKind||selected.has(s.id));
+    const already=new Set(kept.filter(s=>s.kind===pickKind).map(s=>s.id));
+    for(const o of rows)if(selected.has(o.id)&&!already.has(o.id))kept.push(makeRouteStop(pickKind,o));
+    state.route.stops=kept.filter(s=>stopAddress(s));resetRouteProgress();routePickerKind='';await saveState();renderRouteCreate();
+  };
 }
 
 function renderRouteInlineForm(){
   if(!routeInlineMode)return'';
-  if(routeInlineMode==='insert')return `<section class="panel route-inline-panel"><div class="title">Insert Address</div><div class="formgrid"><div class="field"><label>Label (optional)</label><input id="routeInsertName" placeholder="Pickup, appointment, etc."></div><div class="field"><label>Address</label><input id="routeInsertAddress" placeholder="Street, city, state ZIP"></div></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeInsertApply">Apply</button></div></section>`;
-  if(routeInlineMode==='save')return `<section class="panel route-inline-panel"><div class="title">Save Current Route</div><div class="field"><label>Route Name</label><input id="routeSaveName" placeholder="Nightly House Checks"></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeSaveApply">Save Route</button></div></section>`;
+  if(routeInlineMode==='insert')return `<section class="panel route-inline-panel"><div class="title">Enter an Address</div><div class="formgrid"><div class="field"><label>Label (optional)</label><input id="routeInsertName" placeholder="Pickup, appointment, etc."></div><div class="field route-address-field"><label>Address</label><input id="routeInsertAddress" placeholder="Street, city, state ZIP"></div></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeInsertApply">Add to Route</button></div></section>`;
+  if(routeInlineMode==='save')return `<section class="panel route-inline-panel"><div class="title">Save This Route</div><div class="field"><label>Route Name</label><input id="routeSaveName" placeholder="Nightly House Checks"></div><div class="actions"><button class="btn" id="routeInlineCancel">Cancel</button><button class="btn primary" id="routeSaveApply">Save Route</button></div></section>`;
   return'';
 }
 function wireRouteInlineForm(){
   const cancel=document.getElementById('routeInlineCancel');if(cancel)cancel.onclick=()=>{routeInlineMode='';renderRouteCreate()};
-  const insert=document.getElementById('routeInsertApply');if(insert)insert.onclick=async()=>{const address=document.getElementById('routeInsertAddress').value.trim();if(!address){alert('Enter an address.');return}const name=document.getElementById('routeInsertName').value.trim()||'Inserted Address';state.route.stops.push(makeRouteStop('custom',{id:uuid(),name,address}));routeInlineMode='';await saveState();renderRouteCreate()};
-  const save=document.getElementById('routeSaveApply');if(save)save.onclick=async()=>{const name=document.getElementById('routeSaveName').value.trim();if(!name){alert('Enter a route name.');return}const now=new Date().toISOString();state.savedRoutes.push({id:uuid(),name,createdAt:now,updatedAt:now,startMode:state.route.startMode,startLocationId:state.route.startLocationId,stops:deepClone(state.route.stops)});routeInlineMode='';await saveState();renderRouteCreate()};
+  const insert=document.getElementById('routeInsertApply');if(insert)insert.onclick=async()=>{const address=document.getElementById('routeInsertAddress').value.trim();if(!address){alert('Enter an address.');return}const name=document.getElementById('routeInsertName').value.trim()||'Inserted Address';state.route.stops.push(makeRouteStop('custom',{id:uuid(),name,address}));resetRouteProgress();routeInlineMode='';await saveState();renderRouteCreate()};
+  const save=document.getElementById('routeSaveApply');if(save)save.onclick=async()=>{
+    const name=document.getElementById('routeSaveName').value.trim();if(!name){alert('Enter a route name.');return}
+    const now=new Date().toISOString(),existing=state.savedRoutes.find(r=>r.name.trim().toLowerCase()===name.toLowerCase());
+    if(existing){if(!confirm(`Replace the saved route “${existing.name}”?`))return;existing.name=name;existing.updatedAt=now;existing.startMode=state.route.startMode;existing.startLocationId=state.route.startLocationId;existing.stops=deepClone(state.route.stops)}
+    else state.savedRoutes.push({id:uuid(),name,createdAt:now,updatedAt:now,startMode:state.route.startMode,startLocationId:state.route.startLocationId,stops:deepClone(state.route.stops)});
+    routeInlineMode='';await saveState();renderRouteCreate();
+  };
 }
 
-function renderRouteLoad(){
-  const view=document.getElementById('view');
-  setModulePrevious(()=>setRouteView('create'),'Create Route');
-  const list=(state.savedRoutes||[]).slice().sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
-  view.innerHTML=`<section class="panel"><div class="title">Load Route</div><div class="muted">Choose a saved route configuration. Loading replaces the current route workspace only.</div></section><section class="history-list">${list.map(r=>`<article class="card history-card"><div><b>${esc(r.name)}</b><div class="meta">${r.stops.length} stops • ${new Date(r.updatedAt||r.createdAt).toLocaleDateString()}</div></div><div class="actions"><button class="btn primary" data-loadroute="${esc(r.id)}">Load</button><button class="btn red" data-delroute="${esc(r.id)}">Delete</button></div></article>`).join('')||'<section class="panel"><div class="muted">No saved routes yet.</div></section>'}</section>`;
-  view.querySelectorAll('[data-loadroute]').forEach(b=>b.onclick=async()=>{const r=state.savedRoutes.find(x=>x.id===b.dataset.loadroute);if(!r)return;state.route={stops:deepClone(r.stops),startMode:r.startMode==='location'?'location':'current',startLocationId:r.startLocationId||''};if(state.route.startMode==='location'&&!locationById(state.route.startLocationId)){state.route.startMode='current';state.route.startLocationId=''}await saveState();setRouteView('create')});
-  view.querySelectorAll('[data-delroute]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this saved route?'))return;state.savedRoutes=state.savedRoutes.filter(x=>x.id!==b.dataset.delroute);await saveState();renderRouteLoad()});
+function renderSavedRoutes(fromPlan=false){
+  const view=document.getElementById('view'),list=(state.savedRoutes||[]).slice().sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+  setModulePrevious(()=>fromPlan?setRouteView('create'):setRouteView('menu'),fromPlan?'Plan Route':'Route Planner');
+  view.innerHTML=`<section class="panel"><div class="title">Saved Routes</div><div class="muted">Loading a route replaces only the current route workspace. Your locations and house-check database are untouched.</div></section><section class="history-list">${list.map(r=>`<article class="card history-card route-saved-card"><div><b>${esc(r.name)}</b><div class="meta">${r.stops.length} stop${r.stops.length===1?'':'s'} • updated ${new Date(r.updatedAt||r.createdAt).toLocaleDateString()}</div></div><div class="actions"><button class="btn primary" data-loadroute="${esc(r.id)}">Load</button><button class="btn red" data-delroute="${esc(r.id)}">Delete</button></div></article>`).join('')||'<section class="panel"><div class="muted">No saved routes yet. Build one in Plan Route, then tap Save Route.</div></section>'}</section>`;
+  view.querySelectorAll('[data-loadroute]').forEach(b=>b.onclick=async()=>{const r=state.savedRoutes.find(x=>x.id===b.dataset.loadroute);if(!r)return;state.route={stops:deepClone(r.stops),startMode:r.startMode==='location'?'location':'current',startLocationId:r.startLocationId||'',runIndex:0};if(state.route.startMode==='location'&&!locationById(state.route.startLocationId)){state.route.startMode='current';state.route.startLocationId=''}await saveState();setRouteView('create')});
+  view.querySelectorAll('[data-delroute]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this saved route?'))return;state.savedRoutes=state.savedRoutes.filter(x=>x.id!==b.dataset.delroute);await saveState();renderSavedRoutes(fromPlan)});
 }
 
-function routeMapsUrl(){
-  const stops=validRouteStops();if(!stops.length)return'';
-  const addresses=stops.map(stopAddress),destination=addresses[addresses.length-1],waypoints=addresses.slice(0,-1);
-  const params=new URLSearchParams({api:'1',destination,travelmode:'driving'});
-  const start=currentStartLocation();if(start?.address)params.set('origin',start.address);
-  if(waypoints.length)params.set('waypoints',waypoints.join('|'));
+function routeMapsUrlForStop(index){
+  const stops=validRouteStops();if(index<0||index>=stops.length)return'';
+  const params=new URLSearchParams({api:'1',destination:stopAddress(stops[index]),travelmode:'driving'});
+  if(index===0){const start=currentStartLocation();if(start?.address)params.set('origin',start.address)}
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 function renderRouteCreate(){
   if(routePickerKind)return renderRoutePicker(routePickerKind);
-  const view=document.getElementById('view'),stops=validRouteStops(),allStarts=state.locations.filter(l=>l.address);
+  const view=document.getElementById('view'),stops=validRouteStops(),allStarts=orderedRouteLocations();
   setModulePrevious(()=>setRouteView('menu'),'Route Planner');
-  const startValue=state.route.startMode==='location'&&locationById(state.route.startLocationId)?state.route.startLocationId:'__current__';
-  view.innerHTML=`<section class="panel"><div class="title">Create Route</div><div class="muted">Choose addresses, set the starting point, use Smart Route if useful, then fine-tune the order manually.</div></section>
-  <section class="route-create-toolbar">
-    <button class="route-tool-button" id="routeClientHomes">🏠 <b>CLIENT HOMES</b></button>
-    <button class="route-tool-button" id="routeLocationPicker">📌 <b>ROUTE LOCATIONS</b></button>
-    <button class="route-tool-button" id="routeInsertAddress">＋ <b>INSERT ADDRESS</b></button>
-    <button class="route-tool-button" id="routeSmart" ${stops.length<2?'disabled':''}>🧠 <b>SMART ROUTE</b></button>
-    <button class="route-tool-button" id="routeSave">💾 <b>SAVE ROUTE</b></button>
-    <button class="route-tool-button" id="routeLoad">📂 <b>LOAD ROUTE</b></button>
-  </section>
+  const startValue=state.route.startMode==='location'&&locationById(state.route.startLocationId)?state.route.startLocationId:'__current__',transport=transportationLocation();
+  view.innerHTML=`<section class="panel route-plan-head"><div><div class="title">Plan Route</div><div class="muted">Add the stops, put them in the order you want, then start the route.</div></div><button class="btn red" id="routeClear" ${stops.length?'':'disabled'}>Clear</button></section>
+  <section class="panel route-start-panel"><div class="field"><label>Start From</label><select id="routeStart"><option value="__current__" ${startValue==='__current__'?'selected':''}>Current Position</option>${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div>${transport?`<button class="btn route-home-button" id="routeHomeStart" ${startValue===transport.id?'disabled':''}>🏢 Use Transportation Home</button>`:''}</section>
+  <section class="route-add-strip"><button class="route-tool-button" id="routeClientHomes">🏠 <span><b>CLIENT HOMES</b><small>Select one, several, or all</small></span></button><button class="route-tool-button" id="routeLocationPicker">📍 <span><b>LOCATIONS</b><small>Business and saved places</small></span></button><button class="route-tool-button" id="routeInsertAddress">＋ <span><b>ENTER ADDRESS</b><small>One-time stop</small></span></button></section>
   ${renderRouteInlineForm()}
-  <section class="panel"><div class="field"><label>Starting Point</label><select id="routeStart"><option value="__current__" ${startValue==='__current__'?'selected':''}>Current Position</option>${allStarts.map(l=>`<option value="${esc(l.id)}" ${startValue===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div><div class="muted route-start-hint">Transportation Home can be selected here and saved with a route configuration.</div></section>
-  <section class="panel route-order-panel"><div class="route-order-head"><div><div class="title">Current Route</div><div class="muted">Full-width rows keep the move controls lined up. Smart Route never disables manual ordering.</div></div><button class="btn red" id="routeClear" ${stops.length?'':'disabled'}>Clear</button></div><div id="routeOrder" class="route-order-list"></div><div class="actions route-nav-actions"><a id="routeNavigate" class="btn primary route-navigate" target="_blank" rel="noopener">Navigate</a></div><div class="notice">Smart Route is a local street-and-house-number organizer. It does not send the house list to an external optimization service. You can always correct the order with the arrows.</div></section>`;
+  <section class="panel route-order-panel"><div class="route-order-head"><div><div class="title">Route Order</div><div class="muted">${stops.length?`${stops.length} destination${stops.length===1?'':'s'}. Use the arrows whenever you want to change the order.`:'Add destinations above to begin.'}</div></div><button class="btn" id="routeSmart" ${stops.length<2?'disabled':''}>🧠 Smart Route</button></div><div id="routeOrder" class="route-order-list"></div></section>
+  <section class="route-plan-actions"><button class="btn" id="routeLoad">📂 Load Saved</button><button class="btn" id="routeSave" ${stops.length?'':'disabled'}>💾 Save Route</button><button class="btn primary route-start-route" id="routeStartRun" ${stops.length?'':'disabled'}>▶ START ROUTE</button></section>`;
   wireRouteInlineForm();
-  document.getElementById('routeClientHomes').onclick=()=>{routePickerKind='clients';routePickerDraft=deepClone(state.route.stops);renderRoute()};
-  document.getElementById('routeLocationPicker').onclick=()=>{routePickerKind='locations';routePickerDraft=deepClone(state.route.stops);renderRoute()};
+  document.getElementById('routeClientHomes').onclick=()=>{routePickerKind='clients';renderRoute()};
+  document.getElementById('routeLocationPicker').onclick=()=>{routePickerKind='locations';renderRoute()};
   document.getElementById('routeInsertAddress').onclick=()=>{routeInlineMode='insert';renderRouteCreate()};
-  document.getElementById('routeSmart').onclick=async()=>{state.route.stops=[...state.route.stops].sort(smartRouteCompare);await saveState();renderRouteCreate()};
+  document.getElementById('routeSmart').onclick=async()=>{state.route.stops=smartRouteStops();resetRouteProgress();await saveState();renderRouteCreate()};
   document.getElementById('routeSave').onclick=()=>{routeInlineMode='save';renderRouteCreate()};
-  document.getElementById('routeLoad').onclick=()=>setRouteView('load');
-  document.getElementById('routeStart').onchange=async e=>{if(e.target.value==='__current__'){state.route.startMode='current';state.route.startLocationId=''}else{state.route.startMode='location';state.route.startLocationId=e.target.value}await saveState();renderRouteCreate()};
-  document.getElementById('routeClear').onclick=async()=>{if(!confirm('Clear the current route?'))return;state.route.stops=[];await saveState();renderRouteCreate()};
+  document.getElementById('routeLoad').onclick=()=>{routePlannerView='load';renderSavedRoutes(true)};
+  document.getElementById('routeStart').onchange=async e=>{if(e.target.value==='__current__'){state.route.startMode='current';state.route.startLocationId=''}else{state.route.startMode='location';state.route.startLocationId=e.target.value}resetRouteProgress();await saveState();renderRouteCreate()};
+  if(document.getElementById('routeHomeStart'))document.getElementById('routeHomeStart').onclick=async()=>{state.route.startMode='location';state.route.startLocationId=transport.id;resetRouteProgress();await saveState();renderRouteCreate()};
+  document.getElementById('routeClear').onclick=async()=>{if(!confirm('Clear the current route?'))return;state.route.stops=[];resetRouteProgress();await saveState();renderRouteCreate()};
+  document.getElementById('routeStartRun').onclick=async()=>{state.route.runIndex=0;await saveState();setRouteView('run')};
   const box=document.getElementById('routeOrder');
-  box.innerHTML=`<div class="route route-start-row"><b>START</b><span>${esc(routeStartLabel())}</span><span class="route-row-controls"></span></div>`+(stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button><button class="route-remove" data-remove="${i}" aria-label="Remove stop">×</button></span></div>`).join(''):'<div class="route-empty">No destinations inserted yet.</div>');
+  box.innerHTML=`<div class="route route-start-row"><b>START</b><span>${esc(routeStartLabel())}</span><span class="route-row-controls route-row-controls-empty"></span></div>`+(stops.length?stops.map((s,i)=>`<div class="route route-stop-row"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span class="route-row-controls"><button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move stop up">↑</button><button class="route-arrow" data-down="${i}" ${i===stops.length-1?'disabled':''} aria-label="Move stop down">↓</button><button class="route-remove" data-remove="${i}" aria-label="Remove stop">×</button></span></div>`).join(''):'<div class="route-empty">No destinations in this route yet.</div>');
   box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));
   box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
-  box.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{state.route.stops.splice(+b.dataset.remove,1);await saveState();renderRouteCreate()});
-  const nav=document.getElementById('routeNavigate'),url=routeMapsUrl();if(url)nav.href=url;else{nav.style.opacity='.42';nav.removeAttribute('href')}
+  box.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{state.route.stops.splice(+b.dataset.remove,1);resetRouteProgress();await saveState();renderRouteCreate()});
 }
-async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];await saveState();renderRouteCreate()}
+async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];resetRouteProgress();await saveState();renderRouteCreate()}
+
+function renderRouteRun(){
+  const view=document.getElementById('view'),stops=validRouteStops();
+  if(!stops.length){routePlannerView='create';return renderRouteCreate()}
+  let i=Math.max(0,Math.min(Number(state.route.runIndex)||0,stops.length));state.route.runIndex=i;
+  setModulePrevious(()=>setRouteView('create'),'Plan Route');
+  if(i>=stops.length){
+    view.innerHTML=`<section class="panel route-complete"><div class="route-complete-icon">✓</div><div class="title">Route Complete</div><div class="muted">All ${stops.length} planned stops are complete.</div><div class="actions"><button class="btn" id="routeRestart">Run Again</button><button class="btn primary" id="routeBackPlan">Back to Plan</button></div></section>`;
+    document.getElementById('routeRestart').onclick=async()=>{state.route.runIndex=0;await saveState();renderRouteRun()};
+    document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');return;
+  }
+  const current=stops[i],url=routeMapsUrlForStop(i),pct=Math.round((i/stops.length)*100),upNext=stops.slice(i+1,i+4);
+  view.innerHTML=`<section class="panel"><div class="route-run-top"><div><div class="title">Route in Progress</div><div class="muted">Stop ${i+1} of ${stops.length}</div></div><div class="route-run-percent">${pct}%</div></div><div class="progress"><div style="width:${pct}%"></div></div></section>
+  <section class="panel route-next-card"><div class="eyebrow">NEXT STOP</div><div class="route-next-number">${i+1}</div><div class="route-next-address">${esc(stopLabel(current))}</div><a class="btn primary route-open-nav" href="${esc(url)}" target="_blank" rel="noopener">🧭 OPEN NAVIGATION</a><button class="btn route-complete-stop" id="routeCompleteStop">✓ MARK STOP COMPLETE</button></section>
+  <section class="panel"><div class="title">Up Next</div>${upNext.length?upNext.map((s,n)=>`<div class="route-run-upnext"><b>${i+n+2}</b><span>${esc(stopLabel(s))}</span></div>`).join(''):'<div class="muted">This is the final stop.</div>'}</section>
+  <section class="route-run-actions"><button class="btn" id="routeBackPlan">Edit Plan</button>${i>0?'<button class="btn" id="routePreviousStop">Previous Stop</button>':''}<button class="btn" id="routeSkipStop">Skip This Stop</button></section>`;
+  document.getElementById('routeCompleteStop').onclick=async()=>{state.route.runIndex=i+1;await saveState();renderRouteRun()};
+  document.getElementById('routeSkipStop').onclick=async()=>{state.route.runIndex=i+1;await saveState();renderRouteRun()};
+  document.getElementById('routeBackPlan').onclick=()=>setRouteView('create');
+  if(document.getElementById('routePreviousStop'))document.getElementById('routePreviousStop').onclick=async()=>{state.route.runIndex=Math.max(0,i-1);await saveState();renderRouteRun()};
+}
+
 function renderRoute(){
   if(routePlannerView==='create')return renderRouteCreate();
-  if(routePlannerView==='business')return renderRouteLocations('business');
-  if(routePlannerView==='saved')return renderRouteLocations('saved');
-  if(routePlannerView==='load')return renderRouteLoad();
+  if(routePlannerView==='locations')return renderRouteLocations();
+  if(routePlannerView==='savedroutes')return renderSavedRoutes(false);
+  if(routePlannerView==='load')return renderSavedRoutes(true);
+  if(routePlannerView==='run')return renderRouteRun();
   renderRouteMenu();
 }
-function renderLocations(){routePlannerView='saved';screen='route';renderRoute()}
+function renderLocations(){routePlannerView='locations';screen='route';renderRoute()}
 
 /* ---------- PIN-protected Lock Codes ---------- */
 function lockCodeText(){
@@ -2049,7 +2108,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:24,
+    schemaVersion:25,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
