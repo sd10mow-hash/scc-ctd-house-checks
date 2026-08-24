@@ -1,10 +1,10 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.8';
+const VERSION='1.4.9';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
-const WORK_EMAIL_DOMAIN='shawneecounselingcenter.org';
+const WORK_EMAIL_DOMAIN='shawneecounseling.org';
 const STORE='kv', META='meta', DATA='data';
 const ENC=new TextEncoder(), DEC=new TextDecoder();
 let cryptoKey=null,state=null,screen='tonight',activePropertyId=null,editPropertyId=null,editLocationId=null;
@@ -98,14 +98,14 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:11,
+    schemaVersion:12,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
     route:{stops:[],baseId:'base-home-office'},
     settings:{
       reporterName:'',
-      reporterRole:'',
+      authorizedUserCell:'',
       userWorkEmail:'',
       profileComplete:false,
       organization:'Shawnee Counseling Center',
@@ -204,7 +204,8 @@ function normalizeState(raw){
   const oldNum=s.settings?.reportTextNumber||s.settings?.transportNumber||'';
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
   if(!d.settings.reporterName&&s.settings?.driverName)d.settings.reporterName=s.settings.driverName;
-  if(Number(s.schemaVersion||0)<8)d.settings.profileComplete=false;
+  d.settings.authorizedUserCell=d.settings.authorizedUserCell||'';
+  if(Number(s.schemaVersion||0)<12)d.settings.profileComplete=false;
   d.currentRun=s.currentRun&&s.currentRun.checks?{...s.currentRun,id:s.currentRun.id||uuid(),startedAt:s.currentRun.startedAt||new Date().toISOString()}:{id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   d.history=Array.isArray(s.history)?s.history:[];
   if(Number(s.schemaVersion||0)<5){
@@ -224,7 +225,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=11;
+  d.schemaVersion=12;
   return d;
 }
 function getCheck(pid,room){
@@ -318,16 +319,16 @@ async function decryptState(payload,k){
 }
 async function databaseExists(){return !!(await kvGet(META))}
 async function saveState(){if(state&&cryptoKey)await kvPut(DATA,await encryptState(state))}
-async function setupDatabase(pin,reportNumber,reporterName,reporterRole,userWorkEmail){
+async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,userWorkEmail){
   const salt=crypto.getRandomValues(new Uint8Array(16));
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
   state.settings.reporterName=String(reporterName||'').trim();
-  state.settings.reporterRole=String(reporterRole||'').trim();
+  state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:11});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:12});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -422,22 +423,31 @@ async function refreshAppFiles(){
 
 
 async function ensureUserProfile(){
-  if(state?.settings?.profileComplete && state.settings.reporterName && validWorkEmail(state.settings.userWorkEmail))return true;
+  if(
+    state?.settings?.profileComplete &&
+    state.settings.reporterName &&
+    digits(state.settings.authorizedUserCell).length>=10 &&
+    validWorkEmail(state.settings.userWorkEmail)
+  )return true;
+
   return new Promise(resolve=>{
     const s=state.settings||{};
     const wrap=document.createElement('div');wrap.className='pin-overlay';
     wrap.innerHTML=`<div class="pin-dialog user-profile-setup">
-      <div class="title">Who is using this phone?</div>
-      <div class="muted">This identifies the person completing the house-check report. The name will print as “Reported by” on the final report.</div>
+      <div class="title">Authorized User Setup</div>
+      <div class="muted">This identifies the person using this phone. The authorized user name prints as “Reported by” on the final report.</div>
       <div class="formgrid">
-        <div class="field"><label>Your full name</label><input id="profileReporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}" placeholder="Full name"></div>
-        <div class="field"><label>Job title / role</label><input id="profileReporterRole" value="${esc(s.reporterRole||'')}" placeholder="Transporter"></div>
-        <div class="field"><label>Work email</label><input id="profileWorkEmail" type="email" autocomplete="email" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+        <div class="field"><label>Authorized User Name</label><input id="profileReporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}" placeholder="Full name"></div>
+        <div class="field"><label>Authorized User Cell Number</label><input id="profileAuthorizedCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}" placeholder="(555) 555-1212"></div>
+        <div class="field"><label>Work Email</label><input id="profileWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+        <div class="field"><label>Confirm Work Email</label><input id="profileWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
       </div>
+      <div class="email-domain-hint">Approved domain: <b>@${WORK_EMAIL_DOMAIN}</b></div>
       <div class="error" id="profileSetupError"></div>
-      <div class="actions"><button class="btn primary" id="saveUserProfile">Save User Profile</button></div>
+      <div class="actions"><button class="btn primary" id="saveUserProfile">Save Authorized User</button></div>
     </div>`;
     document.body.appendChild(wrap);
+
     const dialog=wrap.querySelector('.user-profile-setup');
     wrap.querySelectorAll('input,select,textarea').forEach(el=>{
       el.addEventListener('focus',()=>setTimeout(()=>el.scrollIntoView({block:'center',behavior:'smooth'}),180));
@@ -451,19 +461,27 @@ async function ensureUserProfile(){
       window.visualViewport.addEventListener('resize',fit);
       wrap._cleanupViewport=()=>window.visualViewport.removeEventListener('resize',fit);
     }
+
     const done=async()=>{
       const name=wrap.querySelector('#profileReporterName').value.trim();
-      const role=wrap.querySelector('#profileReporterRole').value.trim();
+      const cell=digits(wrap.querySelector('#profileAuthorizedCell').value);
       const email=wrap.querySelector('#profileWorkEmail').value.trim().toLowerCase();
+      const emailConfirm=wrap.querySelector('#profileWorkEmailConfirm').value.trim().toLowerCase();
       const err=wrap.querySelector('#profileSetupError');
-      if(!name){err.textContent='Enter your full name.';return}
-      if(!role){err.textContent='Enter your job title or role.';return}
-      if(!validWorkEmail(email)){err.textContent=`Use your @${WORK_EMAIL_DOMAIN} work email.`;return}
+      err.textContent='';
+
+      if(!name){err.textContent='Enter the Authorized User Name.';return}
+      if(cell.length<10){err.textContent='Enter the Authorized User Cell Number.';return}
+      if(!email){err.textContent='Enter the Work Email.';return}
+      if(!validWorkEmail(email)){err.textContent=`Work Email must end in @${WORK_EMAIL_DOMAIN}.`;return}
+      if(email!==emailConfirm){err.textContent='Work Email entries do not match.';return}
+
       state.settings.reporterName=name;
-      state.settings.reporterRole=role;
+      state.settings.authorizedUserCell=cell;
       state.settings.userWorkEmail=email;
       state.settings.profileComplete=true;
       await saveState();
+
       if(wrap._cleanupViewport)wrap._cleanupViewport();
       wrap.remove();
       resolve(true);
@@ -471,7 +489,6 @@ async function ensureUserProfile(){
     wrap.querySelector('#saveUserProfile').onclick=done;
   });
 }
-
 /* ---------- Lock / Setup ---------- */
 async function showLock(){
   clearTimeout(autoLockTimer);
@@ -486,9 +503,10 @@ async function showLock(){
       <div class="field"><label>${exists?'PIN':'Create PIN'}</label><input id="pin" type="password" inputmode="numeric" minlength="4" required autocomplete="off"></div>
       ${exists?'':`
         <div class="field"><label>Confirm PIN</label><input id="pin2" type="password" inputmode="numeric" minlength="4" required autocomplete="off"></div>
-        <div class="field"><label>Your full name</label><input id="setupReporterName" autocomplete="name" placeholder="Full name" required></div>
-        <div class="field"><label>Job title / role</label><input id="setupReporterRole" placeholder="Transporter" required></div>
-        <div class="field"><label>Work email</label><input id="setupWorkEmail" type="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}" required></div>
+        <div class="field"><label>Authorized User Name</label><input id="setupReporterName" autocomplete="name" placeholder="Full name" required></div>
+        <div class="field"><label>Authorized User Cell Number</label><input id="setupAuthorizedCell" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-1212" required></div>
+        <div class="field"><label>Work Email</label><input id="setupWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="name@${WORK_EMAIL_DOMAIN}" required></div>
+        <div class="field"><label>Confirm Work Email</label><input id="setupWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Retype work email" required></div>
         <div class="field"><label>Report Text Cell Number</label><input id="setupTextNumber" type="tel" inputmode="tel" placeholder="(555) 555-1212" required></div>
         <div class="setup-test"><button class="btn" id="setupTestText" type="button">Test Text Number</button><span class="muted">Opens a harmless test draft. It does not send automatically.</span></div>
       `}
@@ -517,14 +535,17 @@ async function showLock(){
       }else{
         if(pin!==document.getElementById('pin2').value){err.textContent='PINs do not match.';return}
         const name=document.getElementById('setupReporterName').value.trim();
-        const role=document.getElementById('setupReporterRole').value.trim();
+        const authorizedCell=digits(document.getElementById('setupAuthorizedCell').value);
         const email=document.getElementById('setupWorkEmail').value.trim().toLowerCase();
+        const emailConfirm=document.getElementById('setupWorkEmailConfirm').value.trim().toLowerCase();
         const n=digits(document.getElementById('setupTextNumber').value);
-        if(!name){err.textContent='Enter your full name.';return}
-        if(!role){err.textContent='Enter your job title or role.';return}
-        if(!validWorkEmail(email)){err.textContent=`Use your @${WORK_EMAIL_DOMAIN} work email.`;return}
+        if(!name){err.textContent='Enter the Authorized User Name.';return}
+        if(authorizedCell.length<10){err.textContent='Enter the Authorized User Cell Number.';return}
+        if(!email){err.textContent='Enter the Work Email.';return}
+        if(!validWorkEmail(email)){err.textContent=`Work Email must end in @${WORK_EMAIL_DOMAIN}.`;return}
+        if(email!==emailConfirm){err.textContent='Work Email entries do not match.';return}
         if(n.length<10){err.textContent='Enter the report-text cell number.';return}
-        await setupDatabase(pin,n,name,role,email);
+        await setupDatabase(pin,n,name,authorizedCell,email);
       }
       renderShell();
     }catch(ex){err.textContent='Could not open the secure database. '+(ex?.message||'Check the PIN.')}
@@ -1346,7 +1367,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:11,
+    schemaVersion:12,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -1410,7 +1431,7 @@ async function importDatabasePayload(incoming){
   const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
   const localIdentity={
     reporterName:state.settings.reporterName||state.settings.driverName||'',
-    reporterRole:state.settings.reporterRole||'',
+    authorizedUserCell:state.settings.authorizedUserCell||'',
     userWorkEmail:state.settings.userWorkEmail||'',
     profileComplete:!!state.settings.profileComplete
   };
@@ -1526,9 +1547,10 @@ function renderSettings(){
   const s=state.settings,view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="title">Setup & Settings</div><div class="muted">The report-text cell number is intentionally editable so you can test with your own phone before switching to the real recipient.</div></section>
   <section class="panel"><div class="formgrid">
-    <div class="field"><label>Your full name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
-    <div class="field"><label>Job title / role</label><input id="reporterRole" value="${esc(s.reporterRole||'')}"></div>
-    <div class="field"><label>Work email</label><input id="userWorkEmail" type="email" autocomplete="email" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+    <div class="field"><label>Authorized User Name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
+    <div class="field"><label>Authorized User Cell Number</label><input id="authorizedUserCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}"></div>
+    <div class="field"><label>Work Email</label><input id="userWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+    <div class="field"><label>Confirm Work Email</label><input id="userWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
     <div class="field"><label>Organization</label><input id="organization" value="${esc(s.organization)}"></div>
     <div class="field"><label>Report recipient label</label><input id="reportLabel" value="${esc(s.reportTextLabel)}"></div>
     <div class="field"><label>Report Text Cell Number</label><input id="reportNumber" type="tel" inputmode="tel" value="${esc(fmtPhone(s.reportTextNumber))}"></div>
@@ -1536,11 +1558,15 @@ function renderSettings(){
   </div><div class="actions"><button class="btn" id="testText">Test Text</button><button class="btn primary" id="saveSettings">Save Settings</button><button class="btn" id="lockNow">Lock Now</button></div><div class="notice">Test Text opens Messages with a harmless draft to the configured number. The app never silently sends it.</div></section>`;
   document.getElementById('testText').onclick=()=>{const n=digits(document.getElementById('reportNumber').value);if(n.length<10){alert('Enter a valid report-text cell number first.');return}openSms(n,'SCC-CTD House Checks TEST: report texting is configured correctly.')};
   document.getElementById('saveSettings').onclick=async()=>{
-    const reporterName=document.getElementById('reporterName').value.trim(),reporterRole=document.getElementById('reporterRole').value.trim(),userWorkEmail=document.getElementById('userWorkEmail').value.trim().toLowerCase();
-    if(!reporterName){alert('Enter your full name.');return}
-    if(!reporterRole){alert('Enter your job title or role.');return}
-    if(!validWorkEmail(userWorkEmail)){alert(`Use your @${WORK_EMAIL_DOMAIN} work email.`);return}
-    s.reporterName=reporterName;s.reporterRole=reporterRole;s.userWorkEmail=userWorkEmail;s.profileComplete=true;s.organization=document.getElementById('organization').value.trim()||'Organization';
+    const reporterName=document.getElementById('reporterName').value.trim();
+    const authorizedUserCell=digits(document.getElementById('authorizedUserCell').value);
+    const userWorkEmail=document.getElementById('userWorkEmail').value.trim().toLowerCase();
+    const userWorkEmailConfirm=document.getElementById('userWorkEmailConfirm').value.trim().toLowerCase();
+    if(!reporterName){alert('Enter the Authorized User Name.');return}
+    if(authorizedUserCell.length<10){alert('Enter the Authorized User Cell Number.');return}
+    if(!validWorkEmail(userWorkEmail)){alert(`Work Email must end in @${WORK_EMAIL_DOMAIN}.`);return}
+    if(userWorkEmail!==userWorkEmailConfirm){alert('Work Email entries do not match.');return}
+    s.reporterName=reporterName;s.authorizedUserCell=authorizedUserCell;s.userWorkEmail=userWorkEmail;s.profileComplete=true;s.organization=document.getElementById('organization').value.trim()||'Organization';
     s.reportTextLabel=document.getElementById('reportLabel').value.trim()||'Report Recipient';s.reportTextNumber=digits(document.getElementById('reportNumber').value);
     s.autoLockMinutes=Math.max(1,Math.min(120,+document.getElementById('autoLock').value||15));await saveState();bumpLock();alert('Settings saved.');
   };

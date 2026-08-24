@@ -589,3 +589,20 @@ a{color:var(--accent)}
   .pin-overlay{padding-top:max(8px,env(safe-area-inset-top))}
   .pin-dialog{border-radius:14px}
 }
+
+
+/* v1.4.9 authorized-user setup */
+.email-domain-hint{
+  margin-top:8px;
+  padding:8px 10px;
+  border:1px solid rgba(71,235,211,.22);
+  border-radius:10px;
+  background:rgba(71,235,211,.05);
+  color:var(--muted);
+  font-size:11px;
+}
+.user-profile-setup input[type="email"],
+.setup-grid input[type="email"]{
+  text-transform:none;
+  letter-spacing:normal;
+}
