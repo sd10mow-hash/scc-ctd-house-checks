@@ -160,9 +160,9 @@ a{color:var(--accent)}
 .route-tool-button{min-height:54px;font-size:12px;justify-content:flex-start}.route-tool-button:disabled{opacity:.42}
 .route-order-panel{overflow:hidden}.route-order-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.route-order-list{width:100%}
 .route-start-row{border-color:rgba(71,235,211,.28);background:rgba(71,235,211,.055)}
-.route-row-controls{display:grid;grid-template-columns:40px 40px 40px;gap:4px;justify-content:end}
-.route-arrow,.route-remove{width:40px;height:40px;border-radius:10px;border:1px solid var(--border);background:linear-gradient(180deg,#181f24,#0c1114);color:var(--text);font-size:21px;font-weight:950;display:flex;align-items:center;justify-content:center}
-.route-arrow:disabled{opacity:.28}.route-remove{color:#ff9c9c;font-size:24px}.route-empty{padding:18px 8px;color:var(--muted);text-align:center;border:1px dashed var(--border);border-radius:12px;margin-top:8px}
+.route-row-controls{display:grid;grid-template-columns:40px 40px;gap:4px;justify-content:end}
+.route-arrow{width:40px;height:40px;border-radius:10px;border:1px solid var(--border);background:linear-gradient(180deg,#181f24,#0c1114);color:var(--text);font-size:21px;font-weight:950;display:flex;align-items:center;justify-content:center}
+.route-arrow:disabled{opacity:.28}.route-empty{padding:18px 8px;color:var(--muted);text-align:center;border:1px dashed var(--border);border-radius:12px;margin-top:8px}
 .route-navigate{width:100%;min-height:50px}.route-nav-actions{margin-top:12px}.route-select-actions{margin-bottom:8px}.route-start-hint{margin-top:7px}.route-inline-panel{border-color:rgba(71,235,211,.24)}
 .dbstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
 .stat{border-radius:13px;padding:11px;text-align:center}
@@ -1311,8 +1311,8 @@ a{color:var(--accent)}
 
 @media(max-width:560px){
   .route{grid-template-columns:50px minmax(0,1fr) 120px;padding:10px 8px;gap:7px}
-  .route-row-controls{grid-template-columns:36px 36px 36px;gap:4px}
-  .route-arrow,.route-remove{width:36px;height:40px}
+  .route-row-controls{grid-template-columns:36px 36px;gap:4px}
+  .route-arrow{width:36px;height:40px}
   .route-create-toolbar{grid-template-columns:1fr 1fr}
 }
 
@@ -1330,9 +1330,9 @@ a{color:var(--accent)}
 .route-order-list{width:100%;margin-top:8px}
 .route{width:100%;grid-template-columns:52px minmax(0,1fr) 132px;gap:9px;padding:11px 8px 11px 10px;margin:6px 0;border-radius:12px}
 .route>span:nth-child(2){overflow-wrap:anywhere}
-.route-row-controls{grid-template-columns:40px 40px 40px;gap:4px;width:128px;justify-self:end}
+.route-row-controls{grid-template-columns:40px 40px;gap:4px;width:84px;justify-self:end}
 .route-row-controls-empty{visibility:hidden}
-.route-arrow,.route-remove{width:40px;height:42px}
+.route-arrow{width:40px;height:42px}
 .route-plan-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 2px}
 .route-plan-actions .route-start-route{grid-column:1/-1;min-height:58px;font-size:16px;font-weight:950}
 .route-picker-sticky{position:sticky;bottom:max(8px,env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.35fr;gap:8px;padding:10px;background:rgba(3,5,6,.94);border:1px solid var(--border);border-radius:14px;backdrop-filter:blur(14px);z-index:4}
@@ -1352,8 +1352,8 @@ a{color:var(--accent)}
   .route-start-panel{grid-template-columns:1fr}.route-home-button{width:100%}
   .route-add-strip{grid-template-columns:1fr}.route-add-strip .route-tool-button{min-height:58px}
   .route{grid-template-columns:44px minmax(0,1fr) 116px;gap:6px;padding:10px 5px 10px 8px}
-  .route-row-controls{grid-template-columns:36px 36px 36px;gap:3px;width:114px}
-  .route-arrow,.route-remove{width:36px;height:42px}
+  .route-row-controls{grid-template-columns:36px 36px;gap:3px;width:75px}
+  .route-arrow{width:36px;height:42px}
 }
 
 
@@ -1376,3 +1376,6 @@ a{color:var(--accent)}
   .route-start-copy strong{font-size:14px}
   .route-start-copy span{font-size:11px}
 }
+
+.route-batch-list{margin:10px 0 14px;text-align:left;border:1px solid var(--border);border-radius:16px;padding:0 12px;background:rgba(0,0,0,.16)}
+.route-return-leg{color:#8df5a8}.route-return-leg b{color:#8df5a8!important}
