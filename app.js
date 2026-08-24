@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.3.1';
+const VERSION='1.4.1';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const STORE='kv', META='meta', DATA='data';
@@ -10,6 +10,8 @@ let cryptoKey=null,state=null,screen='tonight',activePropertyId=null,editPropert
 let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
 let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
+let routePickerOpen=false,routePickerDraft=null;
+let codesUnlocked=false;
 
 const deepClone=o=>typeof structuredClone==='function'?structuredClone(o):JSON.parse(JSON.stringify(o));
 const uuid=()=>crypto.randomUUID?crypto.randomUUID():('id_'+Date.now()+'_'+Math.random().toString(16).slice(2));
@@ -46,15 +48,41 @@ function revealFullNamesTemporarily(){
 function nameRevealButton(label='Show All Names'){
   return `<button class="btn privacy-btn" id="toggleNames">${showFullNames?'Hide Full Names':label}</button>`;
 }
+
 const clients=p=>p.rooms.filter(r=>r.type==='client');
+const clientNeedsCheck=(p,r)=>p.checkRequired!==false && r.type==='client' && r.checkRequired!==false;
+const propertyNeedsChecks=p=>p.checkRequired!==false && clients(p).some(r=>r.checkRequired!==false);
+function addressParts(address){
+  const s=String(address||'').trim(),m=s.match(/^\s*(\d+)\s+(.+?)(?:,|$)/);
+  return {number:m?Number(m[1]):999999,street:(m?m[2]:s).replace(/\b(street|st\.?|avenue|ave\.?|road|rd\.?|boulevard|blvd\.?|drive|dr\.?|lane|ln\.?|court|ct\.?|highway|hwy\.?)\b/gi,'').replace(/[^a-z0-9 ]/gi,'').trim().toLowerCase()};
+}
+function compareProperties(a,b){
+  const ar=propertyNeedsChecks(a)?0:1,br=propertyNeedsChecks(b)?0:1;if(ar!==br)return ar-br;
+  const A=addressParts(a.address),B=addressParts(b.address);if(A.street!==B.street)return A.street.localeCompare(B.street);return A.number-B.number||String(a.address).localeCompare(String(b.address));
+}
+function orderedProperties(list=state.properties){return [...list].sort(compareProperties)}
+function ensureBaseLocations(list){
+  const defs=[
+    {id:'base-home-office',name:'Home Office',address:'519 Court St, Portsmouth, OH 45662',type:'Office',phone:'',notes:'Base location',isBase:true},
+    {id:'base-transportation',name:'Transportation Division',address:'3977 Rhodes Avenue, Portsmouth, OH 45662',type:'Office',phone:'',notes:'Base location; user-provided operating address',isBase:true}
+  ];
+  for(const d of defs){
+    let x=list.find(l=>l.id===d.id)||list.find(l=>String(l.name||'').toLowerCase()===d.name.toLowerCase());
+    if(!x)list.push({...d});else{x.isBase=true;if(!x.address)x.address=d.address}
+  }
+  return list;
+}
+function baseLocations(){return state.locations.filter(l=>l.isBase)}
+
 const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:2,
+    schemaVersion:4,
     properties:[],
-    locations:[],
-    route:{stops:[]},
+    inactiveClients:[],
+    locations:ensureBaseLocations([]),
+    route:{stops:[],baseId:'base-home-office'},
     settings:{
       driverName:'Steven Mowery',
       organization:'Shawnee Counseling Center',
@@ -73,7 +101,10 @@ function normalizeRoom(r,i){
     name:r?.name??(r?.type==='nobed'?'NO BED':'OPEN'),
     phone:r?.phone??'',
     color:['green','gray'].includes(r?.color)?r.color:'',
-    note:r?.note??r?.permanentNote??''
+    note:r?.note??r?.permanentNote??'',
+    checkRequired:r?.checkRequired!==false,
+    clientId:r?.clientId??(r?.type==='client'?uuid():''),
+    workSchedule:r?.workSchedule??''
   };
 }
 function normalizeProperty(p,i){
@@ -85,22 +116,66 @@ function normalizeProperty(p,i){
     beds:Number(p?.beds)||rooms.length||1,
     checkRequired:p?.checkRequired!==false,
     houseColor:['green','gray','yellow','red'].includes(p?.houseColor)?p.houseColor:'',
-    rooms:rooms.length?rooms:[{room:'1',type:'open',name:'OPEN',phone:'',color:'',note:''}]
+    rooms:rooms.length?rooms:[{room:'1',type:'open',name:'OPEN',phone:'',color:'',note:'',checkRequired:true}]
   };
 }
+
+function normalizeInactiveClient(c,i){
+  return {
+    clientId:String(c?.clientId||('inactive_'+i+'_'+Date.now())),
+    name:c?.name||'Unnamed Client',
+    phone:c?.phone||'',
+    color:['green','gray'].includes(c?.color)?c.color:'',
+    note:c?.note||'',
+    checkRequired:c?.checkRequired!==false,
+    workSchedule:c?.workSchedule||'',
+    previousAddress:c?.previousAddress||'',
+    previousRoom:String(c?.previousRoom||''),
+    inactiveAt:c?.inactiveAt||new Date().toISOString()
+  };
+}
+function clientRecordFromRoom(r,address='',room=''){
+  return normalizeInactiveClient({
+    clientId:r.clientId||uuid(),
+    name:r.name,phone:r.phone,color:r.color,note:r.note,
+    checkRequired:r.checkRequired,workSchedule:r.workSchedule,
+    previousAddress:address,previousRoom:room||r.room,
+    inactiveAt:new Date().toISOString()
+  },0);
+}
+function archiveClient(r,address='',room=''){
+  if(!r||r.type!=='client')return;
+  const rec=clientRecordFromRoom(r,address,room);
+  const ix=state.inactiveClients.findIndex(c=>c.clientId===rec.clientId);
+  if(ix>=0)state.inactiveClients[ix]=rec;else state.inactiveClients.push(rec);
+}
+function activeClientRecords(){
+  const out=[];
+  for(const p of state.properties)for(const r of p.rooms)if(r.type==='client')out.push({property:p,room:r});
+  return out;
+}
+function availableOpenBeds(){
+  const out=[];
+  for(const p of orderedProperties())for(const r of p.rooms)if(r.type==='open')out.push({property:p,room:r});
+  return out;
+}
+
 function normalizeState(raw){
   const d=defaultState(), s=raw&&typeof raw==='object'?raw:{};
   d.properties=Array.isArray(s.properties)?s.properties.map(normalizeProperty):[];
+  d.inactiveClients=Array.isArray(s.inactiveClients)?s.inactiveClients.map(normalizeInactiveClient):[];
   d.locations=Array.isArray(s.locations)?s.locations.map((l,i)=>({
     id:String(l?.id??('l'+i+'_'+Date.now())),name:l?.name??'Unnamed Location',address:l?.address??'',
-    type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??''
+    type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase
   })):[];
-  d.route=s.route&&Array.isArray(s.route.stops)?s.route:{stops:[]};
+  ensureBaseLocations(d.locations);
+  d.route=s.route&&Array.isArray(s.route.stops)?{...s.route,stops:s.route.stops}:{stops:[]};
+  if(!d.route.baseId)d.route.baseId='base-home-office';
   const oldNum=s.settings?.reportTextNumber||s.settings?.transportNumber||'';
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
   d.currentRun=s.currentRun&&s.currentRun.checks?{...s.currentRun,id:s.currentRun.id||uuid(),startedAt:s.currentRun.startedAt||new Date().toISOString()}:{id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   d.history=Array.isArray(s.history)?s.history:[];
-  d.schemaVersion=2;
+  d.schemaVersion=4;
   return d;
 }
 function getCheck(pid,room){
@@ -108,7 +183,7 @@ function getCheck(pid,room){
   return state.currentRun.checks[k]||(state.currentRun.checks[k]={status:'',note:''});
 }
 function requiresNote(status){
-  return !!status && status!=='Home';
+  return status==='Not Home';
 }
 function checkResolved(c){
   if(!c?.status)return false;
@@ -117,9 +192,8 @@ function checkResolved(c){
 function requiredNoteIssues(properties=state.properties,checks=state.currentRun.checks){
   const issues=[];
   for(const p of properties){
-    if(p.checkRequired===false)continue;
     for(const r of p.rooms){
-      if(r.type!=='client')continue;
+      if(!clientNeedsCheck(p,r))continue;
       const c=checks[checkKey(p.id,r.room)];
       if(c?.status && requiresNote(c.status) && !String(c.note||'').trim()){
         issues.push({propertyId:p.id,address:p.address,room:r.room,name:r.name,status:c.status});
@@ -129,16 +203,15 @@ function requiredNoteIssues(properties=state.properties,checks=state.currentRun.
   return issues;
 }
 function progress(p){
-  if(!p.checkRequired)return {done:0,total:0,pct:100,missing:0};
-  const list=clients(p), done=list.filter(r=>checkResolved(getCheck(p.id,r.room))).length;
+  const list=clients(p).filter(r=>clientNeedsCheck(p,r)),done=list.filter(r=>checkResolved(getCheck(p.id,r.room))).length;
   return {done,total:list.length,pct:list.length?Math.round(done/list.length*100):100,missing:list.length-done};
 }
 function totalsFor(properties=state.properties,checks=state.currentRun.checks){
   let required=0,checked=0,missing=0,notRequired=0;
   for(const p of properties){
-    if(p.checkRequired===false){notRequired++;continue}
     for(const r of p.rooms){
       if(r.type!=='client')continue;
+      if(!clientNeedsCheck(p,r)){notRequired++;continue}
       required++;
       const c=checks[checkKey(p.id,r.room)];
       if(checkResolved(c))checked++;else missing++;
@@ -201,7 +274,7 @@ async function setupDatabase(pin,reportNumber){
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:2});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:4});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -211,6 +284,24 @@ async function unlockDatabase(pin){
   const k=await deriveKey(pin,b64ToBytes(meta.salt));
   state=await decryptState(payload,k);cryptoKey=k;
   await saveState(); // migration save
+}
+
+async function verifyPin(pin){
+  try{
+    const meta=await kvGet(META),payload=await kvGet(DATA);if(!meta||!payload)return false;
+    const k=await deriveKey(pin,b64ToBytes(meta.salt));await decryptState(payload,k);return true;
+  }catch{return false}
+}
+function requestPin(reason='modify this record'){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='pin-overlay';
+    wrap.innerHTML=`<div class="pin-dialog"><div class="title">PIN Required</div><div class="muted">Enter the app PIN to ${esc(reason)}.</div><input id="adminPinInput" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN"><div class="error" id="adminPinError"></div><div class="actions"><button class="btn" id="adminPinCancel">Cancel</button><button class="btn primary" id="adminPinOk">Continue</button></div></div>`;
+    document.body.appendChild(wrap);const input=wrap.querySelector('#adminPinInput'),err=wrap.querySelector('#adminPinError');input.focus();
+    const done=v=>{wrap.remove();resolve(v)};
+    wrap.querySelector('#adminPinCancel').onclick=()=>done(false);
+    const submit=async()=>{const ok=await verifyPin(input.value);if(ok)return done(true);err.textContent='Incorrect PIN.';input.value='';input.focus()};
+    wrap.querySelector('#adminPinOk').onclick=submit;input.onkeydown=e=>{if(e.key==='Enter')submit();if(e.key==='Escape')done(false)};
+  });
 }
 function bumpLock(){
   clearTimeout(autoLockTimer);
@@ -244,6 +335,7 @@ async function start(){
 /* ---------- Lock / Setup ---------- */
 async function showLock(){
   clearTimeout(autoLockTimer);
+  codesUnlocked=false;
   hideFullNames();
   const exists=await databaseExists();
   APP.innerHTML=`<section class="lock panel">
@@ -302,11 +394,16 @@ function renderShell(){
 }
 function drawNav(){
   const nav=document.getElementById('nav');
-  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
+  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
   nav.innerHTML=items.map(([k,l])=>`<button data-nav="${k}" class="${screen===k?'active':''}">${l}</button>`).join('');
-  nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
+  nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{
     hideFullNames();
-    screen=b.dataset.nav;activePropertyId=editPropertyId=editLocationId=null;reportApproved=false;historyOpenId=null;render();
+    const next=b.dataset.nav;
+    if(next==='codes'){
+      if(!await requestPin('view the full lock-code list'))return;
+      codesUnlocked=true;
+    }else codesUnlocked=false;
+    screen=next;activePropertyId=editPropertyId=editLocationId=null;reportApproved=false;historyOpenId=null;render();
   });
 }
 function render(){
@@ -316,6 +413,7 @@ function render(){
   if(screen==='route')return renderRoute();
   if(screen==='report')return renderReport();
   if(screen==='history')return renderHistory();
+  if(screen==='codes')return renderLockCodes();
   if(screen==='properties')return renderProperties();
   if(screen==='locations')return renderLocations();
   if(screen==='database')return renderDatabase();
@@ -324,33 +422,33 @@ function render(){
 }
 
 /* ---------- Tonight ---------- */
-function houseClass(p){return `house-${p.houseColor||'none'} ${p.checkRequired===false?'not-required':''}`}
+function houseClass(p){return `house-${p.houseColor||'none'} ${propertyNeedsChecks(p)?'':'not-required'}`}
 function renderTonight(){
   const view=document.getElementById('view'),T=totalsFor();
   view.innerHTML=`<section class="panel">
     <div class="titlebar"><div class="title">Tonight’s House Checks</div>${nameRevealButton()}</div>
     <div class="kpirow">
       <div class="kpi"><strong>${T.checked}</strong>Checked</div>
-      <div class="kpi"><strong>${T.missing}</strong>Missing</div>
+      <div class="kpi"><strong>${T.missing}</strong>Unresolved</div>
       <div class="kpi"><strong>${T.notRequired}</strong>Not Required</div>
       <div class="kpi"><strong>${state.properties.length}</strong>Total Houses</div>
     </div>
     <div class="muted" style="margin-top:8px">Every configured house will appear on the final report, including houses marked Not Required Tonight.</div>
   </section>
-  <section class="grid">${state.properties.map(p=>{
+  <section class="grid">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
     return `<article class="card ${houseClass(p)}">
       <h3>${p.houseColor?`<span class="house-color ${p.houseColor}"></span> `:''}${esc(p.address)}</h3>
       <div class="houseflag">${
-        p.checkRequired===false
-          ? `<span class="notrequired">● NOT REQUIRED TONIGHT</span>`
+        !propertyNeedsChecks(p)
+          ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
           : g.missing>0
             ? `<span class="required">● CHECKS REQUIRED</span>`
             : `<span class="complete">● COMPLETE</span>`
       }</div>
-      <div class="meta">${p.beds} beds • ${p.checkRequired===false?'excluded from missing count':`${g.done}/${g.total} checked`} • ${open} open • ${noBed} no bed</div>
+      <div class="meta">${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} required checked`} • ${open} open • ${noBed} no bed</div>
       <div class="progress"><span style="width:${g.pct}%"></span></div>
-      <div class="actions"><button class="btn ${p.checkRequired!==false?'primary':''}" data-open="${esc(p.id)}">${p.checkRequired!==false?'Open House':'View House'}</button>${p.checkRequired!==false?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
+      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet. Import the private starter data from Database, or add properties manually.</div></div>'}</section>
   <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
@@ -362,25 +460,46 @@ function renderTonight(){
 function roomCheckHtml(p,r,i){
   if(r.type==='open')return `<div class="room"><div class="roomno">${esc(r.room)}</div><div><span class="tag open">OPEN / EMPTY</span></div></div>`;
   if(r.type==='nobed')return `<div class="room"><div class="roomno">${esc(r.room)}</div><div><span class="tag nobed">NO BED</span></div></div>`;
-  const c=getCheck(p.id,r.room),noteNeeded=requiresNote(c.status),noteMissing=noteNeeded&&!String(c.note||'').trim();
+  const c=getCheck(p.id,r.room),required=clientNeedsCheck(p,r),noteNeeded=required&&requiresNote(c.status),noteMissing=noteNeeded&&!String(c.note||'').trim();
   return `<div class="room"><div class="roomno">${esc(r.room)}</div><div>
     <div class="name ${r.color||'none'}">${esc(displayClientName(r.name))}</div>
+    <div class="client-requirement ${required?'required-client':'notrequired-client'}">${required?'REQUIRED':'NOT REQUIRED'}</div>
     ${r.phone?`<div class="muted"><a href="tel:${esc(r.phone)}">${esc(fmtPhone(r.phone))}</a></div>`:''}
     ${r.note?`<div class="muted">${esc(r.note)}</div>`:''}
-    ${p.checkRequired===false
-      ?`<div class="status-note">No house check required tonight. This client will still appear on the complete final report.</div>`
+    <div class="actions client-actions"><button class="btn" data-profile="${i}">Client Record</button>${c.status==='Not Home'?`<button class="btn" data-working="${i}">Note: Working</button>`:''}</div>
+    ${!required
+      ?`<div class="status-note">No check is required for this client tonight. The client remains on the complete final report.</div>`
       :`<div class="statuses">${['Home','Not Home','Sleep','Pass'].map(s=>`<button class="status ${c.status===s?'sel':''}" data-i="${i}" data-status="${s}">${s}</button>`).join('')}</div>
-        ${noteMissing?`<div class="required-note-alert">NOTE REQUIRED for ${esc(c.status)} before this client is resolved.</div>`:''}
-        <textarea class="note ${noteMissing?'note-required':''}" data-note="${i}" ${noteNeeded?'required':''} placeholder="${noteNeeded?'Required note — explain '+esc(c.status)+'…':'Optional note…'}">${esc(c.note)}</textarea>`}
+        ${noteMissing?`<div class="required-note-alert">NOTE REQUIRED because this client is NOT HOME.</div>`:''}
+        <textarea class="note ${noteMissing?'note-required':''}" data-note="${i}" ${noteNeeded?'required':''} placeholder="${noteNeeded?'Required note — why is the client not home?':'Optional note…'}">${esc(c.note)}</textarea>`}
   </div></div>`;
 }
+
+function showClientProfile(p,r){
+  const wrap=document.createElement('div');wrap.className='pin-overlay';
+  wrap.innerHTML=`<div class="pin-dialog client-profile-dialog">
+    <div class="title">Client Record • ${esc(displayClientName(r.name))}</div>
+    <div class="profile-grid">
+      <div><b>Address</b><span>${esc(p.address)}</span></div>
+      <div><b>Room</b><span>${esc(r.room)}</span></div>
+      <div><b>Phone</b><span>${r.phone?esc(fmtPhone(r.phone)):'Not entered'}</span></div>
+      <div class="profile-wide"><b>Work Schedule</b><span>${esc(r.workSchedule||'No work schedule entered.')}</span></div>
+      <div class="profile-wide"><b>Profile Note</b><span>${esc(r.note||'No profile note entered.')}</span></div>
+    </div>
+    <div class="actions"><button class="btn primary" id="closeClientProfile">Close</button></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('#closeClientProfile').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};
+}
+
 function renderHouse(){
   const p=state.properties.find(x=>x.id===activePropertyId);if(!p){activePropertyId=null;return render()}
   const g=progress(p),view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="househead">
     <div><div class="actions"><button class="btn" id="backHouses">← Houses</button>${nameRevealButton()}</div><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${
-      p.checkRequired===false
-        ? '<span class="notrequired">NOT REQUIRED TONIGHT</span>'
+      !propertyNeedsChecks(p)
+        ? '<span class="notrequired">NO REQUIRED CLIENTS</span>'
         : g.missing>0
           ? '<span class="required">CHECKS REQUIRED</span>'
           : '<span class="complete">COMPLETE</span>'
@@ -414,6 +533,8 @@ function renderHouse(){
     activePropertyId=null;render();
   };
   document.getElementById('editHouse').onclick=()=>{editPropertyId=p.id;activePropertyId=null;screen='properties';render()};
+  view.querySelectorAll('[data-profile]').forEach(b=>b.onclick=()=>{const r=p.rooms[+b.dataset.profile];if(r)showClientProfile(p,r)});
+  view.querySelectorAll('[data-working]').forEach(b=>b.onclick=async()=>{const r=p.rooms[+b.dataset.working];if(!r)return;const c=getCheck(p.id,r.room);c.note='Working';await saveState();renderHouse()});
   view.querySelectorAll('.status').forEach(b=>b.onclick=async()=>{
     const r=p.rooms[+b.dataset.i],c=getCheck(p.id,r.room);
     c.status=b.dataset.status;
@@ -433,19 +554,25 @@ function renderHouse(){
 /* ---------- Properties ---------- */
 function renderProperties(){
   const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Manage addresses, bed capacity, door codes, house colors, and whether a house requires a check tonight. Client names are masked by default.</div></section>
-  <section class="grid">${state.properties.map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${p.checkRequired!==false?'check required':'not required tonight'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Required houses are listed first; houses on the same street flow by house number. Editing or removing a property requires the app PIN.</div></section>
+  <section class="grid">${orderedProperties().map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${propertyNeedsChecks(p)?'required checks':'no required checks'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>
   <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button></div><div id="propertyEditor"></div>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderProperties()};
-  view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{editPropertyId=b.dataset.edit;renderProperties()});
+  view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
+    if(!await requestPin('edit this property and roster'))return;
+    editPropertyId=b.dataset.edit;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
+  });
   view.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{
-    const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p||!confirm(`Remove ${p.address}?`))return;
+    const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p)return;
+    if(!await requestPin(`remove ${p.address}`))return;
+    if(!confirm(`Remove ${p.address}? Clients will be retained in the Inactive Client Registry.`))return;
+    p.rooms.filter(r=>r.type==='client').forEach(r=>archiveClient(r,p.address,r.room));
     state.properties=state.properties.filter(x=>x.id!==p.id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='property'&&s.id===p.id));await saveState();renderProperties();
   });
   document.getElementById('addProperty').onclick=()=>{
-    const p=normalizeProperty({id:uuid(),address:'New Property',doorCode:'',beds:1,checkRequired:true,houseColor:'',rooms:[{room:'1',type:'open',name:'OPEN'}]});
-    state.properties.push(p);editPropertyId=p.id;renderProperties();
+    const p=normalizeProperty({id:uuid(),address:'New Property',doorCode:'',beds:1,checkRequired:true,houseColor:'',rooms:[{room:'1',type:'open',name:'OPEN',checkRequired:true}]});
+    state.properties.push(p);editPropertyId=p.id;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   };
   if(editPropertyId)renderPropertyEditor(state.properties.find(p=>p.id===editPropertyId));
 }
@@ -455,8 +582,10 @@ function roomEditorHtml(r,i){
     <select data-f="type"><option value="client" ${r.type==='client'?'selected':''}>Client</option><option value="open" ${r.type==='open'?'selected':''}>Open</option><option value="nobed" ${r.type==='nobed'?'selected':''}>No Bed</option></select>
     <input data-f="name" value="${esc(r.type==='client'?(showFullNames?r.name:maskClientName(r.name)):'')}" data-fullname="${esc(r.name||'')}" placeholder="Client name">
     <input class="wide" data-f="phone" value="${esc(r.phone||'')}" placeholder="Cell phone">
+    <select data-f="required"><option value="required" ${r.checkRequired!==false?'selected':''}>Required</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Not Required</option></select>
     <select data-f="color"><option value="" ${!r.color?'selected':''}>No color</option><option value="green" ${r.color==='green'?'selected':''}>Green</option><option value="gray" ${r.color==='gray'?'selected':''}>Gray</option></select>
     <button class="btn red" data-remove="${i}">Remove</button>
+    ${r.type==='client'?`<textarea class="room-work" data-f="workSchedule" placeholder="Work schedule, e.g. Mon–Fri 4 PM–12 AM">${esc(r.workSchedule||'')}</textarea>`:''}
   </div>`;
 }
 function renderPropertyEditor(p){
@@ -468,9 +597,9 @@ function renderPropertyEditor(p){
       <div class="field"><label>Door code</label><input id="propCode" value="${esc(p.doorCode)}"></div>
       <div class="field"><label>Number of beds</label><input id="propBeds" type="number" min="1" max="60" value="${p.beds}"></div>
       <div class="field"><label>House color</label><select id="propColor"><option value="" ${!p.houseColor?'selected':''}>No house color</option><option value="green" ${p.houseColor==='green'?'selected':''}>Green</option><option value="gray" ${p.houseColor==='gray'?'selected':''}>Gray</option><option value="yellow" ${p.houseColor==='yellow'?'selected':''}>Yellow</option><option value="red" ${p.houseColor==='red'?'selected':''}>Red</option></select></div>
-      <label class="checkboxline"><input id="propRequired" type="checkbox" ${p.checkRequired!==false?'checked':''}> House check required tonight</label>
+      <label class="checkboxline"><input id="propRequired" type="checkbox" ${p.checkRequired!==false?'checked':''}> House participates in checks</label>
     </div>
-    <div class="notice">A property marked Not Required Tonight remains on the complete final report. It is not counted as missing.</div>
+    <div class="notice">Each client now has a Required / Not Required field. A Not Required client stays on the final report but is never counted as unresolved.</div>
     <h3>Beds / Rooms</h3>${p.rooms.map(roomEditorHtml).join('')}
     <div class="actions"><button class="btn" id="addBed">+ Bed</button><button class="btn primary" id="saveProperty">Save Property</button><button class="btn" id="cancelProperty">Cancel</button></div>
   </section>`;
@@ -478,33 +607,39 @@ function renderPropertyEditor(p){
     const input=document.getElementById('propBeds'),n=Math.max(1,Math.min(60,+input.value||1));
     if(n<p.rooms.length){
       const occupied=p.rooms.slice(n).filter(r=>r.type==='client');
-      if(occupied.length&&!confirm(`Reducing capacity removes: ${occupied.map(r=>r.name).join(', ')}. Continue?`)){input.value=p.rooms.length;return}
+      if(occupied.length&&!confirm(`Reducing capacity moves these clients to Inactive: ${occupied.map(r=>displayClientName(r.name)).join(', ')}. Continue?`)){input.value=p.rooms.length;return}
+      occupied.forEach(r=>archiveClient(r,p.address,r.room));
       p.rooms=p.rooms.slice(0,n);
-    }else while(p.rooms.length<n)p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN'},p.rooms.length));
+    }else while(p.rooms.length<n)p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:true},p.rooms.length));
     p.beds=p.rooms.length;renderPropertyEditor(p);
   };
-  document.getElementById('addBed').onclick=()=>{p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN'},p.rooms.length));p.beds=p.rooms.length;renderPropertyEditor(p)};
+  document.getElementById('addBed').onclick=()=>{p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:true},p.rooms.length));p.beds=p.rooms.length;renderPropertyEditor(p)};
   e.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
-    const r=p.rooms[+b.dataset.remove];if(r.type==='client'&&!confirm(`Remove ${r.name}?`))return;p.rooms.splice(+b.dataset.remove,1);p.beds=p.rooms.length;renderPropertyEditor(p);
+    const r=p.rooms[+b.dataset.remove];
+    if(r.type==='client'&&!confirm(`Move ${displayClientName(r.name)} to Inactive and remove this bed/room row?`))return;
+    if(r.type==='client')archiveClient(r,p.address,r.room);
+    p.rooms.splice(+b.dataset.remove,1);p.beds=p.rooms.length;renderPropertyEditor(p);
   });
   document.getElementById('cancelProperty').onclick=()=>{editPropertyId=null;renderProperties()};
   document.getElementById('saveProperty').onclick=async()=>{
     p.address=document.getElementById('propAddress').value.trim()||'Unnamed Property';
-    p.doorCode=document.getElementById('propCode').value.trim();
-    p.houseColor=document.getElementById('propColor').value;
-    p.checkRequired=document.getElementById('propRequired').checked;
+    p.doorCode=document.getElementById('propCode').value.trim();p.houseColor=document.getElementById('propColor').value;p.checkRequired=document.getElementById('propRequired').checked;
     e.querySelectorAll('[data-row]').forEach(row=>{
-      const r=p.rooms[+row.dataset.row];r.room=row.querySelector('[data-f="room"]').value.trim()||String(+row.dataset.row+1);r.type=row.querySelector('[data-f="type"]').value;
+      const r=p.rooms[+row.dataset.row],previous=deepClone(r),nextType=row.querySelector('[data-f="type"]').value;
+      if(previous.type==='client'&&nextType!=='client')archiveClient(previous,p.address,previous.room);
+      r.room=row.querySelector('[data-f="room"]').value.trim()||String(+row.dataset.row+1);r.type=nextType;
       if(r.type==='client'){
         const nameInput=row.querySelector('[data-f="name"]'),typed=nameInput.value.trim(),original=nameInput.dataset.fullname||'';
         r.name=(!showFullNames && typed===maskClientName(original)) ? original : (typed||'Unnamed Client');
-      }else r.name=r.type==='open'?'OPEN':'NO BED';
+        r.checkRequired=row.querySelector('[data-f="required"]').value!=='notrequired';
+        if(!r.clientId)r.clientId=uuid();
+        r.workSchedule=row.querySelector('[data-f="workSchedule"]')?.value.trim()||'';
+      }else{r.name=r.type==='open'?'OPEN':'NO BED';r.checkRequired=false;r.clientId='';r.workSchedule=''}
       r.phone=r.type==='client'?row.querySelector('[data-f="phone"]').value.trim():'';r.color=r.type==='client'?row.querySelector('[data-f="color"]').value:'';
     });
     p.beds=p.rooms.length;await saveState();editPropertyId=null;renderProperties();
   };
 }
-
 
 /* ---------- 3x3 Client Search ---------- */
 function clientSearchResults(query){
@@ -569,26 +704,78 @@ function renderLocationEditor(l){
 function stopObj(s){return s.kind==='property'?state.properties.find(p=>p.id===s.id):state.locations.find(l=>l.id===s.id)}
 function stopLabel(s){const o=stopObj(s);return o?(s.kind==='property'?o.address:`${o.name} • ${o.address}`):'Missing stop'}
 function stopAddress(s){return stopObj(s)?.address||''}
+function baseLocation(){return state.locations.find(l=>l.id===state.route.baseId)||baseLocations()[0]||null}
+function smartRouteCompare(a,b){
+  const A=addressParts(stopAddress(a)),B=addressParts(stopAddress(b));if(A.street!==B.street)return A.street.localeCompare(B.street);return A.number-B.number;
+}
+function renderRoutePicker(){
+  const view=document.getElementById('view');if(!routePickerDraft)routePickerDraft=deepClone(state.route.stops);
+  const checked=(kind,id)=>routePickerDraft.some(s=>s.kind===kind&&s.id===id);
+  const nonBaseLocs=state.locations.filter(l=>!l.isBase);
+  view.innerHTML=`<section class="panel"><div class="title">Choose Route Stops</div><div class="muted">All known residential and saved addresses are here. Check what you need, then tap OK to return to the route.</div></section>
+  <section class="panel"><h3>Residential Properties</h3><div class="route-picker-list">${orderedProperties().map(p=>`<label class="route-choice"><input type="checkbox" data-pick-kind="property" data-pick-id="${esc(p.id)}" ${checked('property',p.id)?'checked':''}><span><b>${esc(p.address)}</b><small>${propertyNeedsChecks(p)?'Required house':'No required checks'}</small></span></label>`).join('')}</div>
+  <h3>Other Locations</h3><div class="route-picker-list">${nonBaseLocs.map(l=>`<label class="route-choice"><input type="checkbox" data-pick-kind="location" data-pick-id="${esc(l.id)}" ${checked('location',l.id)?'checked':''}><span><b>${esc(l.name)}</b><small>${esc(l.address)}</small></span></label>`).join('')||'<div class="muted">No other saved locations.</div>'}</div>
+  <div class="actions"><button class="btn" id="routePickerCancel">Cancel</button><button class="btn primary" id="routePickerOk">OK</button></div></section>`;
+  view.querySelectorAll('[data-pick-kind]').forEach(c=>c.onchange=()=>{const s={kind:c.dataset.pickKind,id:c.dataset.pickId};if(c.checked&&!routePickerDraft.some(x=>x.kind===s.kind&&x.id===s.id))routePickerDraft.push(s);if(!c.checked)routePickerDraft=routePickerDraft.filter(x=>!(x.kind===s.kind&&x.id===s.id))});
+  document.getElementById('routePickerCancel').onclick=()=>{routePickerOpen=false;routePickerDraft=null;renderRoute()};
+  document.getElementById('routePickerOk').onclick=async()=>{state.route.stops=routePickerDraft.filter(s=>stopAddress(s));routePickerOpen=false;routePickerDraft=null;await saveState();renderRoute()};
+}
 function renderRoute(){
-  const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="title">Circular Route Planner</div><div class="muted">Properties and saved locations can both be route stops.</div></section>
-  <section class="panel"><h3>Properties</h3><div class="grid">${state.properties.map(p=>`<label class="checkline"><input type="checkbox" data-kind="property" data-id="${esc(p.id)}" ${state.route.stops.some(s=>s.kind==='property'&&s.id===p.id)?'checked':''}>${esc(p.address)}</label>`).join('')}</div>
-  <h3>Other Locations</h3><div class="grid">${state.locations.map(l=>`<label class="checkline"><input type="checkbox" data-kind="location" data-id="${esc(l.id)}" ${state.route.stops.some(s=>s.kind==='location'&&s.id===l.id)?'checked':''}>${esc(l.name)} • ${esc(l.address)}</label>`).join('')||'<div class="muted">No extra locations stored.</div>'}</div></section>
-  <section class="panel"><div class="title">Route Order</div><div id="routeOrder"></div><div class="actions"><a id="mapsLink" class="btn primary" target="_blank" rel="noopener">Open Circular Trip in Google Maps</a></div></section>`;
-  view.querySelectorAll('[data-kind]').forEach(c=>c.onchange=async()=>{
-    const s={kind:c.dataset.kind,id:c.dataset.id};
-    if(c.checked&&!state.route.stops.some(x=>x.kind===s.kind&&x.id===s.id))state.route.stops.push(s);
-    if(!c.checked)state.route.stops=state.route.stops.filter(x=>!(x.kind===s.kind&&x.id===s.id));
-    await saveState();renderRoute();
-  });
-  const stops=state.route.stops.filter(s=>stopAddress(s)),box=document.getElementById('routeOrder');
-  box.innerHTML=stops.map((s,i)=>`<div class="route"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span><button class="btn" data-up="${i}" ${i===0?'disabled':''}>↑</button><button class="btn" data-down="${i}" ${i===stops.length-1?'disabled':''}>↓</button></span></div>`).join('')||'<div class="muted">Select at least two stops.</div>';
-  box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));
-  box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
+  if(routePickerOpen)return renderRoutePicker();
+  const view=document.getElementById('view'),bases=baseLocations(),base=baseLocation(),stops=state.route.stops.filter(s=>stopAddress(s));
+  view.innerHTML=`<section class="panel"><div class="title">Circular Route Planner</div><div class="muted">Choose a home base, pick stops from the address menu, then manually move stops or use Auto Order for street/house-number progression. Google Maps handles the driving path and returns to the same base.</div></section>
+  <section class="panel"><div class="formgrid"><div class="field"><label>Home Base (start and finish)</label><select id="routeBase">${bases.map(l=>`<option value="${esc(l.id)}" ${base?.id===l.id?'selected':''}>${esc(l.name)} • ${esc(l.address)}</option>`).join('')}</select></div></div>
+  <div class="actions"><button class="btn primary" id="chooseStops">Choose Stops</button><button class="btn" id="autoOrder" ${stops.length<2?'disabled':''}>Auto Order</button></div></section>
+  <section class="panel"><div class="title">Route Order</div><div id="routeOrder"></div><div class="actions"><a id="mapsLink" class="btn primary" target="_blank" rel="noopener">Open Loop in Google Maps</a></div><div class="notice">Auto Order keeps the same street together and puts house numbers in progression. True shortest-distance optimization would require sending residential addresses to an external routing service, so this build does not do that silently.</div></section>`;
+  document.getElementById('routeBase').onchange=async e=>{state.route.baseId=e.target.value;state.route.stops=state.route.stops.filter(s=>s.id!==state.route.baseId);await saveState();renderRoute()};
+  document.getElementById('chooseStops').onclick=()=>{routePickerDraft=deepClone(state.route.stops);routePickerOpen=true;renderRoute()};
+  document.getElementById('autoOrder').onclick=async()=>{state.route.stops=[...state.route.stops].sort(smartRouteCompare);await saveState();renderRoute()};
+  const box=document.getElementById('routeOrder');
+  box.innerHTML=(base?`<div class="route base-stop"><b>BASE</b><span>${esc(base.name)} • ${esc(base.address)}</span><span></span></div>`:'')+stops.map((s,i)=>`<div class="route"><b>${i+1}</b><span>${esc(stopLabel(s))}</span><span><button class="btn" data-up="${i}" ${i===0?'disabled':''}>↑</button><button class="btn" data-down="${i}" ${i===stops.length-1?'disabled':''}>↓</button></span></div>`).join('')+(base?`<div class="route base-stop"><b>END</b><span>${esc(base.name)} • ${esc(base.address)}</span><span></span></div>`:'');
+  box.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.up,-1));box.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>moveRoute(+b.dataset.down,1));
   const a=document.getElementById('mapsLink');
-  if(stops.length<2){a.style.opacity='.45';a.removeAttribute('href')}else{const ads=stops.map(stopAddress),start=ads[0];a.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(start)}&destination=${encodeURIComponent(start)}&waypoints=${encodeURIComponent(ads.slice(1).join('|'))}&travelmode=driving`}
+  if(!base||stops.length<1){a.style.opacity='.45';a.removeAttribute('href')}else{const ads=stops.map(stopAddress);a.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(base.address)}&destination=${encodeURIComponent(base.address)}&waypoints=${encodeURIComponent(ads.join('|'))}&travelmode=driving`}
 }
 async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)return;[state.route.stops[i],state.route.stops[j]]=[state.route.stops[j],state.route.stops[i]];await saveState();renderRoute()}
+
+
+/* ---------- PIN-protected Lock Codes ---------- */
+function lockCodeText(){
+  const lines=['SCC-CTD HOUSE LOCK CODES',''];
+  for(const p of orderedProperties())lines.push(`${p.address}: ${p.doorCode||'NOT ENTERED'}`);
+  lines.push('',`Generated ${new Date().toLocaleString()}`);
+  return lines.join('\n');
+}
+async function shareLockCodes(){
+  const text=lockCodeText();
+  if(navigator.share){
+    try{await navigator.share({title:'SCC-CTD House Lock Codes',text});return}catch(e){if(e?.name==='AbortError')return}
+  }
+  const n=digits(document.getElementById('codeTextNumber')?.value||'');
+  if(n.length>=10){openSms(n,text);return}
+  alert('This device did not open the share sheet. Enter a cell number and use Text Number.');
+}
+async function chooseCodeContact(){
+  if(!navigator.contacts?.select){alert('Direct address-book picking is not supported by this browser. Use Share / Message, then choose Messages and the recipient from the iPhone share sheet.');return}
+  try{
+    const rows=await navigator.contacts.select(['name','tel'],{multiple:false});
+    const tel=rows?.[0]?.tel?.[0];if(tel)document.getElementById('codeTextNumber').value=fmtPhone(tel);
+  }catch{}
+}
+function renderLockCodes(){
+  if(!codesUnlocked){screen='tonight';return render()}
+  const view=document.getElementById('view');
+  view.innerHTML=`<section class="panel"><div class="title">House Lock Codes</div><div class="muted">PIN-protected list. Print the full sheet or use the system share sheet to send it through Messages.</div></section>
+  <section class="panel code-list" id="lockCodePrint"><div class="code-print-title">SCC-CTD HOUSE LOCK CODES</div>${orderedProperties().map(p=>`<div class="code-list-row"><b>${esc(p.address)}</b><span>${esc(p.doorCode||'NOT ENTERED')}</span></div>`).join('')}<div class="code-print-foot">${esc(new Date().toLocaleString())}</div></section>
+  <section class="panel"><div class="actions"><button class="btn primary" id="printCodes">Print Full List</button><button class="btn green" id="shareCodes">Share / Message</button>${navigator.contacts?.select?'<button class="btn" id="pickCodeContact">Choose Contact</button>':''}<button class="btn" id="hideCodes">Hide Codes</button></div>
+  <div class="formgrid" style="margin-top:10px"><div class="field"><label>Optional cell number fallback</label><input id="codeTextNumber" type="tel" inputmode="tel" placeholder="Cell number"></div></div><div class="actions"><button class="btn" id="textCodes">Text Number</button></div>
+  <div class="notice">On iPhone, Share / Message opens the native share sheet. Choose Messages there, then select the recipient from Contacts. The web app does not need to read your address book directly.</div></section>`;
+  document.getElementById('printCodes').onclick=()=>window.print();
+  document.getElementById('shareCodes').onclick=shareLockCodes;
+  document.getElementById('textCodes').onclick=()=>{const n=digits(document.getElementById('codeTextNumber').value);if(n.length<10){alert('Enter a valid cell number.');return}openSms(n,lockCodeText())};
+  if(document.getElementById('pickCodeContact'))document.getElementById('pickCodeContact').onclick=chooseCodeContact;
+  document.getElementById('hideCodes').onclick=()=>{codesUnlocked=false;screen='tonight';render()};
+}
 
 /* ---------- Report ---------- */
 function currentSnapshot(completedAt=null){
@@ -604,31 +791,32 @@ function currentSnapshot(completedAt=null){
 function statusFor(snapshot,p,r){
   if(r.type==='open')return 'OPEN';
   if(r.type==='nobed')return 'NO BED';
-  if(p.checkRequired===false)return 'NOT REQ';
   const c=snapshot.checks[checkKey(p.id,r.room)];
-  if(!c?.status)return 'MISSING';
+  if(p.checkRequired===false)return c?.status?`HOUSE N/R • ${c.status}`:'HOUSE N/R';
+  if(r.checkRequired===false)return c?.status?`N/R • ${c.status}`:'NOT REQUIRED';
+  if(!c?.status)return 'REQUIRED • NO RESULT';
   if(requiresNote(c.status)&&!String(c.note||'').trim())return `${c.status} • NOTE REQ`;
   return c.status;
 }
 function reportPaper(snapshot,id='reportPaper'){
-  const T=totalsFor(snapshot.properties,snapshot.checks),stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();
+  const T=totalsFor(snapshot.properties,snapshot.checks),stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date(),props=[...snapshot.properties].sort(compareProperties);
   return `<div class="paper" id="${id}">
-    <div class="paperhead"><div class="papertitle">HOUSE CHECK REPORT</div><div class="papermeta">${esc(snapshot.driverName||'Driver')} • ${esc(stamp.toLocaleString())} • ${T.checked}/${T.required} checked • ${T.missing} missing • ${T.notRequired} houses N/R</div></div>
-    <div class="papergrid">${snapshot.properties.map(p=>`<div class="paperhouse house-${p.houseColor||'none'}"><h4>${esc(p.address)} • ${p.beds} beds${p.checkRequired===false?' • NOT REQUIRED TONIGHT':''}</h4>${p.rooms.map(r=>{
-      const status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim(), cls=r.type==='open'?'open':r.type==='nobed'?'nobed':p.checkRequired===false?'notrequired':(status==='MISSING'||status.includes('NOTE REQ'))?'missing':r.color||'';
-      return `<div class="paperrow ${cls}"><span>${esc(r.room)}</span><span>${esc(displayClientName(r.name))}${nightNote?`<small class="report-note">${esc(nightNote)}</small>`:''}</span><span>${esc(status)}</span></div>`;
+    <div class="paperhead"><div class="papertitle">HOUSE CHECK REPORT</div><div class="papermeta">${esc(snapshot.driverName||'Driver')} • ${esc(stamp.toLocaleString())} • ${T.checked}/${T.required} required checks • ${T.missing} unresolved • ${T.notRequired} clients N/R</div></div>
+    <div class="papergrid">${props.map(p=>`<div class="paperhouse house-${p.houseColor||'none'}"><h4>${esc(p.address)} • ${p.beds} beds${propertyNeedsChecks(p)?'':' • NO REQUIRED CHECKS'}</h4>${p.rooms.map(r=>{
+      const status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim(), cls=r.type==='open'?'open':r.type==='nobed'?'nobed':!clientNeedsCheck(p,r)?'notrequired':(status.includes('NO RESULT')||status.includes('NOTE REQ'))?'missing':r.color||'';
+      return `<div class="paperrow ${cls}"><span>${esc(r.room)}</span><span>${esc(displayClientName(r.name))}${nightNote?`<small class="report-note"><b>Remarks:</b> ${esc(nightNote)}</small>`:''}</span><span>${esc(status)}</span></div>`;
     }).join('')}</div>`).join('')}</div>
-    <div class="paperfoot">Complete roster report. Houses marked NOT REQUIRED remain included. MISSING means a required client has no recorded check result. Report anyone you can't reach and can't see to the on-call person.</div>
+    <div class="paperfoot">Complete roster report. REQUIRED • NO RESULT means a required client has no recorded check result. NOT REQUIRED remains on the report without counting as unresolved. Report anyone you can't reach and can't see to the on-call person.</div>
   </div>`;
 }
 function renderReport(){
   const view=document.getElementById('view'),snap=currentSnapshot(),T=totalsFor();
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div>${nameRevealButton()}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify missing vs not-required before approval.'} Client names are masked by default.</div></section>
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div>${nameRevealButton()}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify unresolved required clients and Not Required clients before approval.'} Client names are masked by default.</div></section>
   <section class="reportwrap">${reportPaper(snap)}</section>
   <section class="panel">${reportApproved?`<div class="delivery">
     <button class="btn" id="previewAgain">Preview Again</button><button class="btn" id="printReport">Print</button><button class="btn" id="saveReport">Save Snapshot</button><button class="btn" id="emailReport">Email Report</button><button class="btn green" id="textReport">Text Report</button><button class="btn primary" id="completeRun">Complete & Save to History</button>
   </div>`:`<div class="actions"><button class="btn" id="backChecks">← Back to Checks</button><button class="btn primary" id="approveReport">Approve Complete Report</button></div>`}
-  <div class="notice">${reportApproved?`Report text recipient: ${esc(fmtPhone(state.settings.reportTextNumber))}. No message is sent until you finish it in Messages.`:`${T.checked} checked • ${T.missing} missing • ${T.notRequired} houses not required • ${state.properties.length} total houses in report.`}</div></section>`;
+  <div class="notice">${reportApproved?`Report text recipient: ${esc(fmtPhone(state.settings.reportTextNumber))}. No message is sent until you finish it in Messages.`:`${T.checked} required checks recorded • ${T.missing} unresolved • ${T.notRequired} clients not required • ${state.properties.length} total houses in report.`}</div></section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderReport()};
   if(!reportApproved){
@@ -651,30 +839,27 @@ function renderReport(){
   }
 }
 async function makeReportPng(snapshot){
-  const W=1650,H=1275,c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
-  x.fillStyle='#fff';x.fillRect(0,0,W,H);x.fillStyle='#111';x.font='bold 28px system-ui';x.textAlign='left';x.fillText('HOUSE CHECK REPORT',28,38);
-  const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();x.textAlign='right';x.font='16px system-ui';x.fillText(`${snapshot.driverName||'Driver'} • ${stamp.toLocaleString()}`,W-28,38);
-  x.strokeStyle='#17365d';x.lineWidth=3;x.beginPath();x.moveTo(28,52);x.lineTo(W-28,52);x.stroke();
-  const cols=4,gap=12,left=28,top=68,cw=(W-left*2-gap*(cols-1))/cols,ys=[top,top,top,top],rh=20,hh=28;
+  const W=1650,margin=34,gap=22,cols=2,cw=(W-margin*2-gap)/cols,hh=32,rowBase=28,noteLine=18;
+  const measure=document.createElement('canvas').getContext('2d');measure.font='14px system-ui';
+  const wrap=(text,maxWidth,font='14px system-ui')=>{measure.font=font;const words=String(text||'').split(/\s+/).filter(Boolean),lines=[];let line='';for(const w of words){const t=line?line+' '+w:w;if(measure.measureText(t).width>maxWidth&&line){lines.push(line);line=w}else line=t}if(line)lines.push(line);return lines.length?lines:['']};
+  const props=[...snapshot.properties].sort(compareProperties);
+  const blocks=props.map(p=>{
+    let h=hh+6;const rows=p.rooms.map(r=>{const c=snapshot.checks[checkKey(p.id,r.room)],note=String(c?.note||'').trim(),name=maskClientName(r.name),status=statusFor(snapshot,p,r);const noteLines=note?wrap('Remarks: '+note,cw-28,'13px system-ui'):[];const rh=rowBase+noteLines.length*noteLine;h+=rh;return {r,c,note,name,status,noteLines,rh}});return {p,rows,h:h+6};
+  });
+  const columns=[[],[]],heights=[76,76];for(const b of blocks){const i=heights[0]<=heights[1]?0:1;columns[i].push(b);heights[i]+=b.h+10}
+  const footerH=58,H=Math.max(1100,Math.ceil(Math.max(...heights)+footerH));
+  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,W,H);
+  x.fillStyle='#111';x.font='bold 30px system-ui';x.textAlign='left';x.fillText('HOUSE CHECK REPORT',margin,42);const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();x.textAlign='right';x.font='16px system-ui';x.fillText(`${snapshot.driverName||'Driver'} • ${stamp.toLocaleString()}`,W-margin,42);x.strokeStyle='#17365d';x.lineWidth=3;x.beginPath();x.moveTo(margin,56);x.lineTo(W-margin,56);x.stroke();
   const headColors={green:'#3d856d',gray:'#65717a',yellow:'#b59c34',red:'#a84742'};
-  for(const p of snapshot.properties){
-    const col=ys.indexOf(Math.min(...ys)),px=left+col*(cw+gap),py=ys[col],h=hh+p.rooms.length*rh+5;
-    x.strokeStyle='#555';x.strokeRect(px,py,cw,h);x.fillStyle=headColors[p.houseColor]||'#2d6f9f';x.fillRect(px,py,cw,hh);
-    x.fillStyle=p.houseColor==='yellow'?'#111':'#fff';x.font='bold 11px system-ui';x.textAlign='left';x.fillText(`${p.address} • ${p.beds} beds${p.checkRequired===false?' • NOT REQUIRED':''}`,px+6,py+18);
-    p.rooms.forEach((r,i)=>{
-      const ry=py+hh+i*rh,status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim();
-      let fill='#fff';
-      if(r.type==='open')fill='#fff4a6';else if(r.type==='nobed')fill='#e46a61';else if(p.checkRequired===false)fill='#f2edcf';else if(status==='MISSING')fill='#ffd9d6';else if(r.color==='green')fill='#cdebe3';else if(r.color==='gray')fill='#ddd';
-      x.fillStyle=fill;x.fillRect(px,ry,cw,rh);x.strokeStyle='#bbb';x.strokeRect(px,ry,cw,rh);x.fillStyle='#111';x.font='10px system-ui';x.textAlign='left';x.fillText(`${r.room}  ${maskClientName(r.name)}${nightNote?' • '+nightNote:''}`.slice(0,52),px+5,ry+14);x.textAlign='right';x.fillText(status,px+cw-5,ry+14);
-    });ys[col]+=h+8;
-  }
-  x.fillStyle='#111';x.textAlign='left';x.font='12px system-ui';x.fillText("Complete roster report. NOT REQUIRED remains included; MISSING means a required client has no result.",28,H-24);
+  columns.forEach((col,ci)=>{let py=76,px=margin+ci*(cw+gap);for(const b of col){const p=b.p;x.strokeStyle='#555';x.strokeRect(px,py,cw,b.h);x.fillStyle=headColors[p.houseColor]||'#2d6f9f';x.fillRect(px,py,cw,hh);x.fillStyle=p.houseColor==='yellow'?'#111':'#fff';x.font='bold 13px system-ui';x.textAlign='left';x.fillText(`${p.address} • ${p.beds} beds${propertyNeedsChecks(p)?'':' • NO REQUIRED CHECKS'}`,px+8,py+21);let ry=py+hh;
+      for(const row of b.rows){let fill='#fff';if(row.r.type==='open')fill='#fff4a6';else if(row.r.type==='nobed')fill='#e46a61';else if(!clientNeedsCheck(p,row.r))fill='#f2edcf';else if(row.status.includes('NO RESULT')||row.status.includes('NOTE REQ'))fill='#ffd9d6';else if(row.r.color==='green')fill='#cdebe3';else if(row.r.color==='gray')fill='#ddd';x.fillStyle=fill;x.fillRect(px,ry,cw,row.rh);x.strokeStyle='#bbb';x.strokeRect(px,ry,cw,row.rh);x.fillStyle='#111';x.font='13px system-ui';x.textAlign='left';x.fillText(`${row.r.room}  ${row.name}`,px+7,ry+18);x.textAlign='right';x.font='bold 12px system-ui';x.fillText(row.status,px+cw-7,ry+18);if(row.noteLines.length){x.textAlign='left';x.font='13px system-ui';row.noteLines.forEach((line,li)=>x.fillText(line,px+22,ry+rowBase+13+li*noteLine))}ry+=row.rh}py+=b.h+10}});
+  x.fillStyle='#111';x.textAlign='left';x.font='13px system-ui';x.fillText('Complete roster report. Required clients without a result are labeled REQUIRED • NO RESULT. Remarks are shown in full on their own lines.',margin,H-24);
   return new Promise(res=>c.toBlob(res,'image/png',.95));
 }
 function reportFilename(snapshot){const d=(snapshot.completedAt?new Date(snapshot.completedAt):new Date()).toISOString().slice(0,10);return `house-check-report-${d}.png`}
 async function downloadSnapshot(snapshot){const b=await makeReportPng(snapshot),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=reportFilename(snapshot);a.click();setTimeout(()=>URL.revokeObjectURL(u),1200)}
 function openSms(number,body){const n=digits(number);if(!n)return;location.href=`sms:${n}?body=${encodeURIComponent(body)}`}
-function reportMessage(snapshot){const T=totalsFor(snapshot.properties,snapshot.checks),when=snapshot.completedAt?new Date(snapshot.completedAt).toLocaleString():new Date().toLocaleString();return `SCC-CTD House Check Report ${when}. ${T.checked}/${T.required} required client checks recorded; ${T.missing} missing; ${T.notRequired} houses marked not required. Report image prepared.`}
+function reportMessage(snapshot){const T=totalsFor(snapshot.properties,snapshot.checks),when=snapshot.completedAt?new Date(snapshot.completedAt).toLocaleString():new Date().toLocaleString();return `SCC-CTD House Check Report ${when}. ${T.checked}/${T.required} required client checks recorded; ${T.missing} unresolved; ${T.notRequired} clients marked not required. Report image prepared.`}
 async function textSnapshot(snapshot){
   const n=digits(state.settings.reportTextNumber);if(n.length<10){alert('Set the Report Text Cell Number in Settings first.');screen='settings';render();return}
   const b=await makeReportPng(snapshot),f=new File([b],reportFilename(snapshot),{type:'image/png'}),msg=reportMessage(snapshot);
@@ -755,7 +940,7 @@ function renderHistory(){
     <div class="actions"><button class="btn" id="calendarToday">Current Month</button></div>
   </section>
   ${historySelectedDate?`<section class="panel"><div class="title">Reports for ${esc(new Date(historySelectedDate+'T12:00:00').toLocaleDateString())}</div>
-    <div class="history-list">${selected.length?selected.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} missing • ${h.notRequired??0} houses N/R</div></div><button class="btn primary" data-history="${esc(h.id)}">Open Report</button></article>`).join(''):'<div class="muted">No completed report on this date.</div>'}</div>
+    <div class="history-list">${selected.length?selected.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} unresolved • ${h.notRequired??0} clients N/R</div></div><button class="btn primary" data-history="${esc(h.id)}">Open Report</button></article>`).join(''):'<div class="muted">No completed report on this date.</div>'}</div>
   </section>`:''}`;
   document.getElementById('prevMonth').onclick=()=>shiftHistoryMonth(-1);
   document.getElementById('nextMonth').onclick=()=>shiftHistoryMonth(1);
@@ -768,8 +953,9 @@ function renderHistory(){
 async function importPrivateData(file){
   const incoming=JSON.parse(await file.text());
   if(!incoming||!Array.isArray(incoming.properties))throw new Error('Not a House Checks starter-data file.');
-  const keepText=state.settings.reportTextNumber;
+  const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
   state.properties=incoming.properties.map(normalizeProperty);
+  state.inactiveClients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map(normalizeInactiveClient):keepInactive;
   state.locations=Array.isArray(incoming.locations)?incoming.locations:[];
   state.route=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
   const incomingSettings=incoming.settings||{};
@@ -778,19 +964,32 @@ async function importPrivateData(file){
   await saveState();
 }
 function exportPrivateData(){
-  const payload={schemaVersion:2,properties:state.properties,locations:state.locations,route:state.route,settings:state.settings};
+  const payload={schemaVersion:4,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');
   a.href=u;a.download='SCC_CTD_House_Checks_PRIVATE_Backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1200);
 }
 function renderDatabase(){
-  const view=document.getElementById('view'),beds=state.properties.reduce((n,p)=>n+p.beds,0),people=state.properties.reduce((n,p)=>n+clients(p).length,0);
-  view.innerHTML=`<section class="panel"><div class="title">Private Data Import / Backup</div><div class="muted">The hosted app package contains no client roster or door codes. Import the private starter data once on this phone.</div><div class="actions"><label class="btn primary" for="importData">Import Private Data</label><input id="importData" type="file" accept=".json,application/json" style="display:none"><button class="btn" id="exportData">Export Private Backup</button></div><div id="importMessage" class="muted" style="margin-top:6px"></div></section>
-  <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${people}</strong>Clients</div><div class="stat"><strong>${state.locations.length}</strong>Locations</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>`;
+  const view=document.getElementById('view'),beds=state.properties.reduce((n,p)=>n+p.beds,0),active=activeClientRecords(),inactive=state.inactiveClients||[],openBeds=availableOpenBeds();
+  const bedOptions=openBeds.map(x=>`<option value="${esc(x.property.id)}::${esc(x.room.room)}">${esc(x.property.address)} • Room ${esc(x.room.room)}</option>`).join('');
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Private Data Import / Backup</div><div class="muted">Removing a client from a house now moves that record to Inactive instead of deleting it.</div></div>${nameRevealButton()}</div><div class="actions"><label class="btn primary" for="importData">Import Private Data</label><input id="importData" type="file" accept=".json,application/json" style="display:none"><button class="btn" id="exportData">Export Private Backup</button></div><div id="importMessage" class="muted" style="margin-top:6px"></div></section>
+  <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${active.length}</strong>Active Clients</div><div class="stat"><strong>${inactive.length}</strong>Inactive Clients</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>
+  <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(x=>`<div class="registry-row"><b>${esc(displayClientName(x.room.name))}</b><span>${esc(x.property.address)} • Room ${esc(x.room.room)}</span><small>${x.room.workSchedule?`Work: ${esc(x.room.workSchedule)}`:'No work schedule entered'}</small></div>`).join('')||'<div class="muted">No active clients.</div>'}</div></section>
+  <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Records stay here so returning clients can be restored instead of re-created.</div><div class="registry-list">${inactive.map((c,i)=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}</small>${openBeds.length?`<div class="registry-restore"><select data-restore-bed="${i}">${bedOptions}</select><button class="btn" data-restore="${i}">Reactivate</button></div>`:'<small>No OPEN bed is currently available for reactivation.</small>'}</div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderDatabase()};
   document.getElementById('importData').onchange=async()=>{
     const f=document.getElementById('importData').files?.[0];if(!f)return;const msg=document.getElementById('importMessage');
     try{await importPrivateData(f);msg.textContent='Private roster imported into the encrypted local database.';setTimeout(renderDatabase,450)}catch(e){msg.textContent='Import failed: '+e.message}
   };
   document.getElementById('exportData').onclick=exportPrivateData;
+  view.querySelectorAll('[data-restore]').forEach(b=>b.onclick=async()=>{
+    if(!await requestPin('reactivate this client'))return;
+    const i=+b.dataset.restore,c=state.inactiveClients[i],sel=view.querySelector(`[data-restore-bed="${i}"]`);if(!c||!sel)return;
+    const [pid,roomNo]=sel.value.split('::'),p=state.properties.find(x=>x.id===pid),r=p?.rooms.find(x=>String(x.room)===roomNo);
+    if(!p||!r||r.type!=='open'){alert('That bed is no longer open. Refresh and choose another.');return}
+    Object.assign(r,{type:'client',name:c.name,phone:c.phone,color:c.color,note:c.note,checkRequired:c.checkRequired,clientId:c.clientId||uuid(),workSchedule:c.workSchedule||''});
+    state.inactiveClients.splice(i,1);await saveState();renderDatabase();
+  });
 }
 
 /* ---------- Settings ---------- */
