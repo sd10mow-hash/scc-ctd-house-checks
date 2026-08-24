@@ -993,3 +993,48 @@ a{color:var(--accent)}
   .day-note-input{min-height:96px}
   .begin-inspection-button{min-height:50px}
 }
+
+
+/* v1.5.5 inspection progress ring */
+.progress-ring{
+  --ring-size:42px;
+  --ring-thickness:5px;
+  width:var(--ring-size);
+  height:var(--ring-size);
+  flex:0 0 var(--ring-size);
+  position:relative;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:conic-gradient(
+    var(--accent) calc(var(--pct) * 1%),
+    #182126 0
+  );
+  box-shadow:0 0 0 1px rgba(255,255,255,.06),0 0 15px rgba(71,235,211,.12);
+}
+.progress-ring::before{
+  content:'';
+  position:absolute;
+  inset:var(--ring-thickness);
+  border-radius:50%;
+  background:#0b1013;
+  border:1px solid rgba(255,255,255,.055);
+}
+.progress-ring > span{
+  position:relative;
+  z-index:1;
+  width:100%;
+  height:100%;
+  display:grid;
+  place-items:center;
+  text-align:center;
+  font-size:10px;
+  line-height:1;
+  font-weight:950;
+  font-variant-numeric:tabular-nums;
+}
+.progress-ring.complete{
+  background:conic-gradient(#7ddd47 100%,#7ddd47 0);
+  box-shadow:0 0 0 1px rgba(125,221,71,.24),0 0 18px rgba(125,221,71,.22);
+}
+.progress-ring.complete > span{color:#aaf17f}

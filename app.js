@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.4';
+const VERSION='1.5.5';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -52,7 +52,7 @@ function nameRevealButton(label='Show All Names'){
 }
 
 const PROPERTY_SITUATIONS={
-  normal:{label:'Normal / Active',color:''},
+  normal:{label:'No Special Status',color:''},
   open:{label:'Open',color:'yellow'},
   notMoved:{label:'Not moved yet',color:'gray'},
   outOfService:{label:'Out of Services',color:'darkgray'},
@@ -99,7 +99,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:17,
+    schemaVersion:18,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -246,7 +246,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=17;
+  d.schemaVersion=18;
   return d;
 }
 function getCheck(pid,room){
@@ -349,7 +349,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:17});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:18});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -763,7 +763,7 @@ function inspectionHouseListHtml(){
   <section class="grid">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
     return `<article class="card ${houseClass(p)}">
-      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3><div class="property-situation">${esc(propertySituationLabel(p))}</div>
+      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3>${propertySituationCardHtml(p)}
       <div class="houseflag">${
         !propertyNeedsChecks(p)
           ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
@@ -773,7 +773,7 @@ function inspectionHouseListHtml(){
       }</div>
       <div class="meta">${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} required checked`} • ${open} open • ${noBed} no bed</div>
       <div class="progress"><span style="width:${g.pct}%"></span></div>
-      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
+      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet.</div></div>'}</section>
   <div class="actions"><button class="btn primary" id="finishRun">Finish Inspection → Final Report</button></div>`;
@@ -812,7 +812,7 @@ function renderInspectionDayDetail(key){
   ${isToday&&!inspectionRunIsActive()?`<section class="panel start-inspection-panel">
     <div class="title">Nightly Inspection</div>
     <div class="muted">This calendar date is the only place a new nightly inspection can be started.</div>
-    <button class="btn primary begin-inspection-button" id="beginInspection">Begin Inspection • ${esc(inspectionDateLabel(key,true))}</button>
+    <button class="btn primary begin-inspection-button" id="beginInspection">Start Inspections • ${esc(inspectionDateLabel(key,true))}</button>
   </section>`:''}
 
   ${isActiveDate?`<section class="panel inspection-active-panel">
@@ -973,6 +973,8 @@ function renderInspections(){
 
 /* ---------- Tonight ---------- */
 function houseClass(p){return `house-${propertySituationColor(p)||'none'} ${propertyNeedsChecks(p)?'':'not-required'}`}
+function propertySituationCardHtml(p){const c=propertySituationColor(p);return c?`${propertySituationCardHtml(p)}`:''}
+
 function renderTonight(){
   const view=document.getElementById('view'),T=totalsFor();
   view.innerHTML=`<section class="panel">
@@ -988,7 +990,7 @@ function renderTonight(){
   <section class="grid">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
     return `<article class="card ${houseClass(p)}">
-      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3><div class="property-situation">${esc(propertySituationLabel(p))}</div>
+      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3>${propertySituationCardHtml(p)}
       <div class="houseflag">${
         !propertyNeedsChecks(p)
           ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
@@ -998,7 +1000,7 @@ function renderTonight(){
       }</div>
       <div class="meta">${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} required checked`} • ${open} open • ${noBed} no bed</div>
       <div class="progress"><span style="width:${g.pct}%"></span></div>
-      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
+      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet. Import the private starter data from Database, or add properties manually.</div></div>'}</section>
   <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
@@ -1503,7 +1505,7 @@ function reportNotes(snapshot,p,r){
 }
 function masterHouseHtml(snapshot,p){
   const situation=propertySituationLabel(p),color=propertySituationColor(p)||'normal';
-  return `<div class="master-house master-house-${color}"><div class="master-house-title"><b>${esc(p.address)}</b>${situation!=='Normal / Active'?`<span>${esc(situation)}</span>`:''}</div>${p.rooms.map(r=>{
+  return `<div class="master-house master-house-${color}"><div class="master-house-title"><b>${esc(p.address)}</b>${situation!=='No Special Status'?`<span>${esc(situation)}</span>`:''}</div>${p.rooms.map(r=>{
     const status=statusFor(snapshot,p,r),m=reportMarks(status),notes=reportNotes(snapshot,p,r);
     const nameClass=r.type==='client'&&r.color?` name-${r.color}`:'';
     return `<div class="master-row ${r.type==='open'?'row-open':r.type==='nobed'?'row-nobed':''}">
@@ -1616,7 +1618,7 @@ async function makeReportPng(snapshot){
     y+=colHeadH;
     for(const h of col){
       drawCell(baseX,y,half,30,propertyFill(h.p));g.fillStyle='#111';g.textAlign='left';g.font='bold 13px Arial';g.fillText(h.p.address,baseX+7,y+15);
-      const sit=propertySituationLabel(h.p);if(sit!=='Normal / Active'){g.textAlign='right';g.font='bold 11px Arial';g.fillText(sit,baseX+half-7,y+15)}
+      const sit=propertySituationLabel(h.p);if(sit!=='No Special Status'){g.textAlign='right';g.font='bold 11px Arial';g.fillText(sit,baseX+half-7,y+15)}
       y+=30;
       for(const row of h.rows){
         const r=row.r;
@@ -1758,7 +1760,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:17,
+    schemaVersion:18,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -1822,10 +1824,21 @@ async function openPortableBackup(file,password){
     throw new Error('Transfer password is incorrect or the backup is damaged.');
   }
   const payload=JSON.parse(DEC.decode(plain));
-  if(!payload||!Array.isArray(payload.properties))throw new Error('Backup contents are invalid.');
+  if(!payload||(!Array.isArray(payload.properties)&&!payload.operationalResetOnly))throw new Error('Backup contents are invalid.');
   return payload;
 }
 async function importDatabasePayload(incoming){
+  if(incoming?.operationalResetOnly){
+    state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
+    state.history=[];
+    state.dailyNotes={};
+    reportApproved=false;
+    historyOpenId=null;
+    inspectionView='calendar';
+    inspectionDayKey=null;
+    await saveState();
+    return;
+  }
   const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
   const localIdentity={
     reporterName:state.settings.reporterName||state.settings.driverName||'',

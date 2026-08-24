@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.5.4
+# SCC-CTD House Checks v1.5.5
 
 GitHub-ready public PWA build.
 
-## v1.5.4 changes
+## v1.5.5 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.5.4 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.5.5 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -162,3 +162,14 @@ V1.5.4 DATE-DRIVEN INSPECTIONS
 - Completed reports are attached to the inspection date, even if completion occurs after midnight.
 - Completed reports still require the app PIN to open, print, text, or email.
 - Top-level Reports no longer shows a ghost blank report before a nightly inspection has been started.
+
+
+V1.5.5 INSPECTION FEEDBACK + CLEAN RESET SUPPORT
+- “Normal / Active” is replaced by “No Special Status” in property management and is hidden from ordinary inspection cards.
+- House progress keeps the horizontal progress bar and adds a true circular progress ring.
+- The percentage number is centered inside the ring.
+- The ring fills as completion increases and turns bright green at 100%.
+- Today's date-detail action is “Start Inspections • <date>”.
+- Added encrypted operational-reset backup support.
+- An operational reset clears only current inspection state, completed/test report history, and calendar Day Notes.
+- Operational reset preserves properties, clients, room assignments, door codes, locations, routing data, local authorized-user identity, and device PIN.
