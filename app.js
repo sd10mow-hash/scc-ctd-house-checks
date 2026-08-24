@@ -1,9 +1,10 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.3';
+const VERSION='1.4.4';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
+const WORK_EMAIL_DOMAIN='shawneecounselingcenter.org';
 const STORE='kv', META='meta', DATA='data';
 const ENC=new TextEncoder(), DEC=new TextDecoder();
 let cryptoKey=null,state=null,screen='tonight',activePropertyId=null,editPropertyId=null,editLocationId=null;
@@ -97,7 +98,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:6,
+    schemaVersion:7,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -218,7 +219,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=6;
+  d.schemaVersion=7;
   return d;
 }
 function getCheck(pid,room){
@@ -317,7 +318,7 @@ async function setupDatabase(pin,reportNumber){
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:6});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:7});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -1220,10 +1221,70 @@ function renderHistory(){
   view.querySelectorAll('[data-history]').forEach(b=>b.onclick=()=>{historyOpenId=b.dataset.history;renderHistory()});
 }
 
-/* ---------- Private import / Database ---------- */
-async function importPrivateData(file){
-  const incoming=JSON.parse(await file.text());
-  if(!incoming||!Array.isArray(incoming.properties))throw new Error('Not a House Checks starter-data file.');
+
+/* ---------- Portable encrypted database transfer ---------- */
+function exportDatabasePayload(){
+  return {
+    product:'SCC-CTD House Checks',
+    backupVersion:1,
+    schemaVersion:7,
+    exportedAt:new Date().toISOString(),
+    properties:state.properties,
+    inactiveClients:state.inactiveClients,
+    locations:state.locations,
+    route:state.route,
+    settings:state.settings
+  };
+}
+function validWorkEmail(email){
+  const v=String(email||'').trim().toLowerCase();
+  return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,}$/i.test(v) && v.endsWith('@'+WORK_EMAIL_DOMAIN);
+}
+async function deriveTransferKey(password,salt,iterations=240000){
+  const material=await crypto.subtle.importKey('raw',ENC.encode(password),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2',salt,iterations,hash:'SHA-256'},
+    material,
+    {name:'AES-GCM',length:256},
+    false,
+    ['encrypt','decrypt']
+  );
+}
+async function makePortableBackup(password){
+  if(String(password||'').length<8)throw new Error('Transfer password must be at least 8 characters.');
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const iterations=240000;
+  const key=await deriveTransferKey(password,salt,iterations);
+  const plain=ENC.encode(JSON.stringify(exportDatabasePayload()));
+  const cipher=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,plain));
+  return {
+    format:'SCC-CTD-PORTABLE-BACKUP',
+    version:1,
+    encryption:'AES-256-GCM',
+    kdf:'PBKDF2-SHA256',
+    iterations,
+    salt:bytesToB64(salt),
+    iv:bytesToB64(iv),
+    data:bytesToB64(cipher)
+  };
+}
+async function openPortableBackup(file,password){
+  const pack=JSON.parse(await file.text());
+  if(pack?.format!=='SCC-CTD-PORTABLE-BACKUP')throw new Error('This is not an SCC-CTD encrypted backup.');
+  const salt=b64ToBytes(pack.salt),iv=b64ToBytes(pack.iv),data=b64ToBytes(pack.data);
+  const key=await deriveTransferKey(password,salt,Number(pack.iterations)||240000);
+  let plain;
+  try{
+    plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);
+  }catch{
+    throw new Error('Transfer password is incorrect or the backup is damaged.');
+  }
+  const payload=JSON.parse(DEC.decode(plain));
+  if(!payload||!Array.isArray(payload.properties))throw new Error('Backup contents are invalid.');
+  return payload;
+}
+async function importDatabasePayload(incoming){
   const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
   state.properties=incoming.properties.map(normalizeProperty);
   state.inactiveClients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map(normalizeInactiveClient):keepInactive;
@@ -1234,25 +1295,94 @@ async function importPrivateData(file){
   state.currentRun={id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   await saveState();
 }
-function exportPrivateData(){
-  const payload={schemaVersion:6,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
-  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');
-  a.href=u;a.download='SCC_CTD_House_Checks_PRIVATE_Backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1200);
+async function promptTransferPassword(title='Transfer Password'){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='pin-overlay';
+    wrap.innerHTML=`<div class="pin-dialog"><div class="title">${esc(title)}</div><div class="muted">Use at least 8 characters. Share this password separately from the backup email.</div><input id="transferPass1" type="password" autocomplete="new-password" placeholder="Transfer password"><input id="transferPass2" type="password" autocomplete="new-password" placeholder="Confirm transfer password"><div class="error" id="transferPassError"></div><div class="actions"><button class="btn" id="transferPassCancel">Cancel</button><button class="btn primary" id="transferPassOk">Continue</button></div></div>`;
+    document.body.appendChild(wrap);
+    const p1=wrap.querySelector('#transferPass1'),p2=wrap.querySelector('#transferPass2'),err=wrap.querySelector('#transferPassError');p1.focus();
+    const done=v=>{wrap.remove();resolve(v)};
+    wrap.querySelector('#transferPassCancel').onclick=()=>done(null);
+    wrap.querySelector('#transferPassOk').onclick=()=>{
+      if(p1.value.length<8){err.textContent='Use at least 8 characters.';return}
+      if(p1.value!==p2.value){err.textContent='Passwords do not match.';return}
+      done(p1.value);
+    };
+  });
+}
+async function promptImportPassword(){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='pin-overlay';
+    wrap.innerHTML=`<div class="pin-dialog"><div class="title">Backup Transfer Password</div><div class="muted">Enter the transfer password used when this backup was created.</div><input id="importTransferPass" type="password" autocomplete="off" placeholder="Transfer password"><div class="actions"><button class="btn" id="importPassCancel">Cancel</button><button class="btn primary" id="importPassOk">Import</button></div></div>`;
+    document.body.appendChild(wrap);const input=wrap.querySelector('#importTransferPass');input.focus();
+    const done=v=>{wrap.remove();resolve(v)};
+    wrap.querySelector('#importPassCancel').onclick=()=>done(null);
+    wrap.querySelector('#importPassOk').onclick=()=>done(input.value);
+  });
+}
+async function emailEncryptedDatabase(){
+  const recipient=document.getElementById('databaseWorkEmail')?.value.trim()||'';
+  if(!validWorkEmail(recipient)){
+    alert(`Database transfers are restricted to @${WORK_EMAIL_DOMAIN} work email addresses.`);
+    return;
+  }
+  if(!await requestPin('export the encrypted client database'))return;
+  const password=await promptTransferPassword('Create Transfer Password');
+  if(!password)return;
+  const pack=await makePortableBackup(password);
+  const stamp=new Date().toISOString().slice(0,10);
+  const filename=`SCC-CTD_Database_${stamp}.sccbackup`;
+  const file=new File([JSON.stringify(pack)],filename,{type:'application/octet-stream'});
+  const text=`SCC-CTD encrypted database backup.\nApproved work recipient: ${recipient}\n\nOpen SCC-CTD → Database → Import Encrypted Database, select this attachment, and enter the transfer password provided separately.`;
+  if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
+    try{
+      await navigator.share({title:'SCC-CTD Encrypted Database Backup',text,files:[file]});
+      return;
+    }catch(e){
+      if(e?.name==='AbortError')return;
+    }
+  }
+  const blobUrl=URL.createObjectURL(file),a=document.createElement('a');
+  a.href=blobUrl;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(blobUrl),1500);
+  alert(`Encrypted backup saved. Attach it to a work email addressed only to ${recipient}.`);
+}
+
+/* ---------- Private import / Database ---------- */
+async function importPrivateData(file){
+  const lower=String(file?.name||'').toLowerCase();
+  if(lower.endsWith('.sccbackup')){
+    const password=await promptImportPassword();if(password===null)throw new Error('Import cancelled.');
+    const incoming=await openPortableBackup(file,password);
+    await importDatabasePayload(incoming);
+    return;
+  }
+  const incoming=JSON.parse(await file.text());
+  if(!incoming||!Array.isArray(incoming.properties))throw new Error('Not a House Checks starter-data file.');
+  await importDatabasePayload(incoming);
+}
+async function exportPrivateData(){
+  alert('Plain JSON export has been disabled. Use Email Encrypted Database for portable transfers.');
 }
 function renderDatabase(){
   const view=document.getElementById('view'),beds=state.properties.reduce((n,p)=>n+p.beds,0),active=activeClientRecords(),inactive=state.inactiveClients||[],openBeds=availableOpenBeds();
   const bedOptions=openBeds.map(x=>`<option value="${esc(x.property.id)}::${esc(x.room.room)}">${esc(x.property.address)} • Room ${esc(x.room.room)}</option>`).join('');
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Private Data Import / Backup</div><div class="muted">Removing a client from a house now moves that record to Inactive instead of deleting it.</div></div>${nameRevealButton()}</div><div class="actions"><label class="btn primary" for="importData">Import Private Data</label><input id="importData" type="file" accept=".json,application/json" style="display:none"><button class="btn" id="exportData">Export Private Backup</button></div><div id="importMessage" class="muted" style="margin-top:6px"></div></section>
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Encrypted Database Transfer</div><div class="muted">Portable database backups are encrypted and restricted in-app to Shawnee Counseling Center work email addresses.</div></div>${nameRevealButton()}</div>
+  <div class="formgrid database-transfer-grid">
+    <div class="field"><label>Work Email Recipient</label><input id="databaseWorkEmail" type="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}"><div class="field-help">Only @${WORK_EMAIL_DOMAIN} addresses are accepted by the app.</div></div>
+  </div>
+  <div class="actions"><button class="btn primary" id="emailDatabase">Email Encrypted Database</button><label class="btn" for="importData">Import Encrypted Database</label><input id="importData" type="file" accept=".sccbackup,.json,application/json,application/octet-stream" style="display:none"></div>
+  <div class="notice">Export asks for your app PIN, then a separate transfer password. The transfer password should be given to the recipient separately. On iPhone, choose Mail in the system share sheet and send only to the approved work recipient.</div>
+  <div id="importMessage" class="muted" style="margin-top:6px"></div></section>
   <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${active.length}</strong>Active Clients</div><div class="stat"><strong>${inactive.length}</strong>Inactive Clients</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>
   <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(x=>`<div class="registry-row"><b>${esc(displayClientName(x.room.name))}</b><span>${esc(x.property.address)} • Room ${esc(x.room.room)}</span><small>${x.room.workSchedule?`Work: ${esc(x.room.workSchedule)}`:'No work schedule entered'}${x.room.schoolSchedule?` • School: ${esc(x.room.schoolSchedule)}`:''}</small></div>`).join('')||'<div class="muted">No active clients.</div>'}</div></section>
   <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Records stay here so returning clients can be restored instead of re-created.</div><div class="registry-list">${inactive.map((c,i)=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}${c.schoolSchedule?` • School: ${esc(c.schoolSchedule)}`:''}</small>${openBeds.length?`<div class="registry-restore"><select data-restore-bed="${i}">${bedOptions}</select><button class="btn" data-restore="${i}">Reactivate</button></div>`:'<small>No OPEN bed is currently available for reactivation.</small>'}</div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderDatabase()};
+  document.getElementById('emailDatabase').onclick=emailEncryptedDatabase;
   document.getElementById('importData').onchange=async()=>{
     const f=document.getElementById('importData').files?.[0];if(!f)return;const msg=document.getElementById('importMessage');
-    try{await importPrivateData(f);msg.textContent='Private roster imported into the encrypted local database.';setTimeout(renderDatabase,450)}catch(e){msg.textContent='Import failed: '+e.message}
+    try{await importPrivateData(f);msg.textContent='Encrypted database imported into this phone’s protected local database.';setTimeout(renderDatabase,450)}catch(e){msg.textContent='Import failed: '+e.message}
   };
-  document.getElementById('exportData').onclick=exportPrivateData;
   view.querySelectorAll('[data-restore]').forEach(b=>b.onclick=async()=>{
     if(!await requestPin('reactivate this client'))return;
     const i=+b.dataset.restore,c=state.inactiveClients[i],sel=view.querySelector(`[data-restore-bed="${i}"]`);if(!c||!sel)return;

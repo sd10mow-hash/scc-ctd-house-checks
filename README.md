@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.4.3
+# SCC-CTD House Checks v1.4.4
 
 GitHub-ready public PWA build.
 
-## v1.4.3 changes
+## v1.4.4 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -42,3 +42,13 @@ V1.4.3 MASTER-SHEET / PROFILE / UPDATE PASS
 - Property colors are no longer arbitrary. Property Situation controls the display color: Normal / Active, Open, Not moved yet, Out of Services, or Can not Bill for.
 - Lock Codes now record the last change date and can be updated quickly from the PIN-protected code screen.
 - Added hard cache-busted asset URLs, no-cache service-worker fetches, and a safe Refresh App Files button that clears only app caches/service workers and preserves encrypted IndexedDB data.
+
+
+V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
+- Portable database transfer uses AES-256-GCM encrypted .sccbackup files.
+- Transfer key uses PBKDF2-SHA256 with 240,000 iterations and a separate transfer password.
+- Database export requires the app PIN again.
+- The app accepts only recipient addresses ending in @shawneecounselingcenter.org before export proceeds.
+- Plain JSON export is disabled from the normal UI.
+- Import accepts encrypted .sccbackup files and asks for the transfer password, then saves the imported data into the recipient phone's encrypted local database under that user's own app PIN.
+- iPhone limitation: after the PWA hands the encrypted attachment to Apple's share sheet, the web app cannot inspect or enforce the final Mail recipient selected there. The in-app work-domain validation occurs before export.
