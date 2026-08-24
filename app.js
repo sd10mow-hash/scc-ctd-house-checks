@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.1';
+const VERSION='1.4.2';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const STORE='kv', META='meta', DATA='data';
@@ -78,7 +78,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:4,
+    schemaVersion:5,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -102,7 +102,7 @@ function normalizeRoom(r,i){
     phone:r?.phone??'',
     color:['green','gray'].includes(r?.color)?r.color:'',
     note:r?.note??r?.permanentNote??'',
-    checkRequired:r?.checkRequired!==false,
+    checkRequired:(typeof r?.checkRequired==='boolean'?r.checkRequired:!['green','gray'].includes(r?.color)),
     clientId:r?.clientId??(r?.type==='client'?uuid():''),
     workSchedule:r?.workSchedule??''
   };
@@ -127,7 +127,7 @@ function normalizeInactiveClient(c,i){
     phone:c?.phone||'',
     color:['green','gray'].includes(c?.color)?c.color:'',
     note:c?.note||'',
-    checkRequired:c?.checkRequired!==false,
+    checkRequired:(typeof c?.checkRequired==='boolean'?c.checkRequired:!['green','gray'].includes(c?.color)),
     workSchedule:c?.workSchedule||'',
     previousAddress:c?.previousAddress||'',
     previousRoom:String(c?.previousRoom||''),
@@ -175,7 +175,17 @@ function normalizeState(raw){
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
   d.currentRun=s.currentRun&&s.currentRun.checks?{...s.currentRun,id:s.currentRun.id||uuid(),startedAt:s.currentRun.startedAt||new Date().toISOString()}:{id:uuid(),startedAt:new Date().toISOString(),checks:{}};
   d.history=Array.isArray(s.history)?s.history:[];
-  d.schemaVersion=4;
+  if(Number(s.schemaVersion||0)<5){
+    for(const p of d.properties){
+      for(const r of p.rooms){
+        if(r.type!=='client')continue;
+        r.checkRequired=!['green','gray'].includes(r.color);
+        if(!r.checkRequired)delete d.currentRun.checks[checkKey(p.id,r.room)];
+      }
+    }
+    for(const c of d.inactiveClients)c.checkRequired=!['green','gray'].includes(c.color);
+  }
+  d.schemaVersion=5;
   return d;
 }
 function getCheck(pid,room){
@@ -274,7 +284,7 @@ async function setupDatabase(pin,reportNumber){
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:4});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:5});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -468,7 +478,7 @@ function roomCheckHtml(p,r,i){
     ${r.note?`<div class="muted">${esc(r.note)}</div>`:''}
     <div class="actions client-actions"><button class="btn" data-profile="${i}">Client Record</button>${c.status==='Not Home'?`<button class="btn" data-working="${i}">Note: Working</button>`:''}</div>
     ${!required
-      ?`<div class="status-note">No check is required for this client tonight. The client remains on the complete final report.</div>`
+      ?`<div class="status-note no-disturb"><b>DO NOT DISTURB • HOUSE CHECK NOT REQUIRED</b><span>This client is listed for awareness only. No inspection result or nightly note can be entered.</span></div>`
       :`<div class="statuses">${['Home','Not Home','Sleep','Pass'].map(s=>`<button class="status ${c.status===s?'sel':''}" data-i="${i}" data-status="${s}">${s}</button>`).join('')}</div>
         ${noteMissing?`<div class="required-note-alert">NOTE REQUIRED because this client is NOT HOME.</div>`:''}
         <textarea class="note ${noteMissing?'note-required':''}" data-note="${i}" ${noteNeeded?'required':''} placeholder="${noteNeeded?'Required note — why is the client not home?':'Optional note…'}">${esc(c.note)}</textarea>`}
@@ -483,6 +493,7 @@ function showClientProfile(p,r){
       <div><b>Address</b><span>${esc(p.address)}</span></div>
       <div><b>Room</b><span>${esc(r.room)}</span></div>
       <div><b>Phone</b><span>${r.phone?esc(fmtPhone(r.phone)):'Not entered'}</span></div>
+      <div><b>House Inspection</b><span class="${r.checkRequired!==false?'profile-required':'profile-notrequired'}">${r.checkRequired!==false?'REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</span></div>
       <div class="profile-wide"><b>Work Schedule</b><span>${esc(r.workSchedule||'No work schedule entered.')}</span></div>
       <div class="profile-wide"><b>Profile Note</b><span>${esc(r.note||'No profile note entered.')}</span></div>
     </div>
@@ -532,7 +543,12 @@ function renderHouse(){
     await saveState();
     activePropertyId=null;render();
   };
-  document.getElementById('editHouse').onclick=()=>{editPropertyId=p.id;activePropertyId=null;screen='properties';render()};
+  document.getElementById('editHouse').onclick=async()=>{
+    if(!await requestPin(`edit ${p.address}`))return;
+    editPropertyId=p.id;activePropertyId=null;screen='properties';
+    render();
+    setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),80);
+  };
   view.querySelectorAll('[data-profile]').forEach(b=>b.onclick=()=>{const r=p.rooms[+b.dataset.profile];if(r)showClientProfile(p,r)});
   view.querySelectorAll('[data-working]').forEach(b=>b.onclick=async()=>{const r=p.rooms[+b.dataset.working];if(!r)return;const c=getCheck(p.id,r.room);c.note='Working';await saveState();renderHouse()});
   view.querySelectorAll('.status').forEach(b=>b.onclick=async()=>{
@@ -554,9 +570,10 @@ function renderHouse(){
 /* ---------- Properties ---------- */
 function renderProperties(){
   const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Required houses are listed first; houses on the same street flow by house number. Editing or removing a property requires the app PIN.</div></section>
-  <section class="grid">${orderedProperties().map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${propertyNeedsChecks(p)?'required checks':'no required checks'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>
-  <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button></div><div id="propertyEditor"></div>`;
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Required houses are listed first; houses on the same street flow by house number. Editing, adding, or removing a property requires the app PIN.</div></section>
+  <div id="propertyEditor"></div>
+  <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button></div>
+  <section class="grid">${orderedProperties().map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${propertyNeedsChecks(p)?'required checks':'no required checks'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderProperties()};
   view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
@@ -570,7 +587,8 @@ function renderProperties(){
     p.rooms.filter(r=>r.type==='client').forEach(r=>archiveClient(r,p.address,r.room));
     state.properties=state.properties.filter(x=>x.id!==p.id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='property'&&s.id===p.id));await saveState();renderProperties();
   });
-  document.getElementById('addProperty').onclick=()=>{
+  document.getElementById('addProperty').onclick=async()=>{
+    if(!await requestPin('add a property'))return;
     const p=normalizeProperty({id:uuid(),address:'New Property',doorCode:'',beds:1,checkRequired:true,houseColor:'',rooms:[{room:'1',type:'open',name:'OPEN',checkRequired:true}]});
     state.properties.push(p);editPropertyId=p.id;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   };
@@ -582,7 +600,7 @@ function roomEditorHtml(r,i){
     <select data-f="type"><option value="client" ${r.type==='client'?'selected':''}>Client</option><option value="open" ${r.type==='open'?'selected':''}>Open</option><option value="nobed" ${r.type==='nobed'?'selected':''}>No Bed</option></select>
     <input data-f="name" value="${esc(r.type==='client'?(showFullNames?r.name:maskClientName(r.name)):'')}" data-fullname="${esc(r.name||'')}" placeholder="Client name">
     <input class="wide" data-f="phone" value="${esc(r.phone||'')}" placeholder="Cell phone">
-    <select data-f="required"><option value="required" ${r.checkRequired!==false?'selected':''}>Required</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Not Required</option></select>
+    <select data-f="required" aria-label="House inspection requirement"><option value="required" ${r.checkRequired!==false?'selected':''}>Inspection REQUIRED</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Inspection NOT REQUIRED</option></select>
     <select data-f="color"><option value="" ${!r.color?'selected':''}>No color</option><option value="green" ${r.color==='green'?'selected':''}>Green</option><option value="gray" ${r.color==='gray'?'selected':''}>Gray</option></select>
     <button class="btn red" data-remove="${i}">Remove</button>
     ${r.type==='client'?`<textarea class="room-work" data-f="workSchedule" placeholder="Work schedule, e.g. Mon–Fri 4 PM–12 AM">${esc(r.workSchedule||'')}</textarea>`:''}
@@ -599,7 +617,7 @@ function renderPropertyEditor(p){
       <div class="field"><label>House color</label><select id="propColor"><option value="" ${!p.houseColor?'selected':''}>No house color</option><option value="green" ${p.houseColor==='green'?'selected':''}>Green</option><option value="gray" ${p.houseColor==='gray'?'selected':''}>Gray</option><option value="yellow" ${p.houseColor==='yellow'?'selected':''}>Yellow</option><option value="red" ${p.houseColor==='red'?'selected':''}>Red</option></select></div>
       <label class="checkboxline"><input id="propRequired" type="checkbox" ${p.checkRequired!==false?'checked':''}> House participates in checks</label>
     </div>
-    <div class="notice">Each client now has a Required / Not Required field. A Not Required client stays on the final report but is never counted as unresolved.</div>
+    <div class="notice"><b>Client House-Inspection Requirement:</b> use the REQUIRED / NOT REQUIRED selector on each client record. NOT REQUIRED clients remain visible during the house visit but are read-only and marked DO NOT DISTURB. Original highlighted clients migrate to NOT REQUIRED automatically.</div>
     <h3>Beds / Rooms</h3>${p.rooms.map(roomEditorHtml).join('')}
     <div class="actions"><button class="btn" id="addBed">+ Bed</button><button class="btn primary" id="saveProperty">Save Property</button><button class="btn" id="cancelProperty">Cancel</button></div>
   </section>`;
@@ -632,6 +650,7 @@ function renderPropertyEditor(p){
         const nameInput=row.querySelector('[data-f="name"]'),typed=nameInput.value.trim(),original=nameInput.dataset.fullname||'';
         r.name=(!showFullNames && typed===maskClientName(original)) ? original : (typed||'Unnamed Client');
         r.checkRequired=row.querySelector('[data-f="required"]').value!=='notrequired';
+        if(!r.checkRequired)delete state.currentRun.checks[checkKey(p.id,r.room)];
         if(!r.clientId)r.clientId=uuid();
         r.workSchedule=row.querySelector('[data-f="workSchedule"]')?.value.trim()||'';
       }else{r.name=r.type==='open'?'OPEN':'NO BED';r.checkRequired=false;r.clientId='';r.workSchedule=''}
@@ -964,7 +983,7 @@ async function importPrivateData(file){
   await saveState();
 }
 function exportPrivateData(){
-  const payload={schemaVersion:4,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
+  const payload={schemaVersion:5,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');
   a.href=u;a.download='SCC_CTD_House_Checks_PRIVATE_Backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1200);
 }

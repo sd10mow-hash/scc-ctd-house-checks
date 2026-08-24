@@ -433,3 +433,25 @@ a{color:var(--accent)}
   #lockCodePrint .code-list-row{border-color:#999!important}
   #lockCodePrint .code-print-foot{color:#333!important}
 }
+
+
+/* v1.4.2 inspection requirement clarity */
+.status-note.no-disturb{
+  display:grid;
+  gap:4px;
+  margin-top:8px;
+  padding:10px;
+  border:1px solid rgba(230,187,67,.30);
+  border-radius:10px;
+  background:rgba(230,187,67,.10);
+  color:#f4dda0;
+}
+.status-note.no-disturb b{font-size:12px;letter-spacing:.035em}
+.status-note.no-disturb span{font-size:11px;color:#c9b982}
+.profile-required{font-weight:900;color:var(--accent)}
+.profile-notrequired{font-weight:900;color:#f4d36b}
+#propertyEditor:empty{display:none}
+#propertyEditor .panel{
+  border-color:rgba(71,235,211,.34);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 18px 44px rgba(0,0,0,.36),0 0 0 1px rgba(71,235,211,.06);
+}
