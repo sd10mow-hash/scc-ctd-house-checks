@@ -606,3 +606,12 @@ a{color:var(--accent)}
   text-transform:none;
   letter-spacing:normal;
 }
+
+
+/* v1.5.0 exact work-email suffix validation */
+.work-email-rule{
+  margin:3px 0 5px;
+  color:var(--muted);
+  font-size:11px;
+}
+.work-email-rule b{color:var(--accent)}

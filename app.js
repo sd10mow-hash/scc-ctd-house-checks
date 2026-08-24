@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.9';
+const VERSION='1.5.0';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -98,7 +98,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:12,
+    schemaVersion:13,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -225,7 +225,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=12;
+  d.schemaVersion=13;
   return d;
 }
 function getCheck(pid,room){
@@ -328,7 +328,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:12});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:13});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -439,8 +439,8 @@ async function ensureUserProfile(){
       <div class="formgrid">
         <div class="field"><label>Authorized User Name</label><input id="profileReporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}" placeholder="Full name"></div>
         <div class="field"><label>Authorized User Cell Number</label><input id="profileAuthorizedCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}" placeholder="(555) 555-1212"></div>
-        <div class="field"><label>Work Email</label><input id="profileWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
-        <div class="field"><label>Confirm Work Email</label><input id="profileWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
+        <div class="field"><label>Work Email</label><div class="work-email-rule">Must end exactly in <b>@${WORK_EMAIL_DOMAIN}</b></div><input id="profileWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+        <div class="field"><label>Confirm Work Email</label><input id="profileWorkEmailConfirm" type="text" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
       </div>
       <div class="email-domain-hint">Approved domain: <b>@${WORK_EMAIL_DOMAIN}</b></div>
       <div class="error" id="profileSetupError"></div>
@@ -465,15 +465,15 @@ async function ensureUserProfile(){
     const done=async()=>{
       const name=wrap.querySelector('#profileReporterName').value.trim();
       const cell=digits(wrap.querySelector('#profileAuthorizedCell').value);
-      const email=wrap.querySelector('#profileWorkEmail').value.trim().toLowerCase();
-      const emailConfirm=wrap.querySelector('#profileWorkEmailConfirm').value.trim().toLowerCase();
+      const email=normalizeWorkEmail(wrap.querySelector('#profileWorkEmail').value);
+      const emailConfirm=normalizeWorkEmail(wrap.querySelector('#profileWorkEmailConfirm').value);
       const err=wrap.querySelector('#profileSetupError');
       err.textContent='';
 
       if(!name){err.textContent='Enter the Authorized User Name.';return}
       if(cell.length<10){err.textContent='Enter the Authorized User Cell Number.';return}
       if(!email){err.textContent='Enter the Work Email.';return}
-      if(!validWorkEmail(email)){err.textContent=`Work Email must end in @${WORK_EMAIL_DOMAIN}.`;return}
+      if(!validWorkEmail(email)){err.textContent=`Work Email must end exactly in @${WORK_EMAIL_DOMAIN}.`;return}
       if(email!==emailConfirm){err.textContent='Work Email entries do not match.';return}
 
       state.settings.reporterName=name;
@@ -505,8 +505,8 @@ async function showLock(){
         <div class="field"><label>Confirm PIN</label><input id="pin2" type="password" inputmode="numeric" minlength="4" required autocomplete="off"></div>
         <div class="field"><label>Authorized User Name</label><input id="setupReporterName" autocomplete="name" placeholder="Full name" required></div>
         <div class="field"><label>Authorized User Cell Number</label><input id="setupAuthorizedCell" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 555-1212" required></div>
-        <div class="field"><label>Work Email</label><input id="setupWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="name@${WORK_EMAIL_DOMAIN}" required></div>
-        <div class="field"><label>Confirm Work Email</label><input id="setupWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Retype work email" required></div>
+        <div class="field"><label>Work Email</label><div class="work-email-rule">Must end exactly in <b>@${WORK_EMAIL_DOMAIN}</b></div><input id="setupWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="name@${WORK_EMAIL_DOMAIN}" required></div>
+        <div class="field"><label>Confirm Work Email</label><input id="setupWorkEmailConfirm" type="text" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Retype work email" required></div>
         <div class="field"><label>Report Text Cell Number</label><input id="setupTextNumber" type="tel" inputmode="tel" placeholder="(555) 555-1212" required></div>
         <div class="setup-test"><button class="btn" id="setupTestText" type="button">Test Text Number</button><span class="muted">Opens a harmless test draft. It does not send automatically.</span></div>
       `}
@@ -536,13 +536,13 @@ async function showLock(){
         if(pin!==document.getElementById('pin2').value){err.textContent='PINs do not match.';return}
         const name=document.getElementById('setupReporterName').value.trim();
         const authorizedCell=digits(document.getElementById('setupAuthorizedCell').value);
-        const email=document.getElementById('setupWorkEmail').value.trim().toLowerCase();
-        const emailConfirm=document.getElementById('setupWorkEmailConfirm').value.trim().toLowerCase();
+        const email=normalizeWorkEmail(document.getElementById('setupWorkEmail').value);
+        const emailConfirm=normalizeWorkEmail(document.getElementById('setupWorkEmailConfirm').value);
         const n=digits(document.getElementById('setupTextNumber').value);
         if(!name){err.textContent='Enter the Authorized User Name.';return}
         if(authorizedCell.length<10){err.textContent='Enter the Authorized User Cell Number.';return}
         if(!email){err.textContent='Enter the Work Email.';return}
-        if(!validWorkEmail(email)){err.textContent=`Work Email must end in @${WORK_EMAIL_DOMAIN}.`;return}
+        if(!validWorkEmail(email)){err.textContent=`Work Email must end exactly in @${WORK_EMAIL_DOMAIN}.`;return}
         if(email!==emailConfirm){err.textContent='Work Email entries do not match.';return}
         if(n.length<10){err.textContent='Enter the report-text cell number.';return}
         await setupDatabase(pin,n,name,authorizedCell,email);
@@ -1367,7 +1367,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:12,
+    schemaVersion:13,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -1379,9 +1379,16 @@ function exportDatabasePayload(){
     }
   };
 }
+function normalizeWorkEmail(email){
+  return String(email||'').replace(/\s+/g,'').trim().toLowerCase();
+}
 function validWorkEmail(email){
-  const v=String(email||'').trim().toLowerCase();
-  return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,}$/i.test(v) && v.endsWith('@'+WORK_EMAIL_DOMAIN);
+  const v=normalizeWorkEmail(email);
+  const at=v.lastIndexOf('@');
+  if(at<=0)return false;
+  if(v.indexOf('@')!==at)return false;
+  const local=v.slice(0,at),domain=v.slice(at+1);
+  return !!local && domain===WORK_EMAIL_DOMAIN;
 }
 async function deriveTransferKey(password,salt,iterations=240000){
   const material=await crypto.subtle.importKey('raw',ENC.encode(password),'PBKDF2',false,['deriveKey']);
@@ -1470,9 +1477,9 @@ async function promptImportPassword(){
   });
 }
 async function emailEncryptedDatabase(){
-  const recipient=document.getElementById('databaseWorkEmail')?.value.trim()||'';
+  const recipient=normalizeWorkEmail(document.getElementById('databaseWorkEmail')?.value||'');
   if(!validWorkEmail(recipient)){
-    alert(`Database transfers are restricted to @${WORK_EMAIL_DOMAIN} work email addresses.`);
+    alert(`Database transfers require an address ending exactly in @${WORK_EMAIL_DOMAIN}.`);
     return;
   }
   if(!await requestPin('export the encrypted client database'))return;
@@ -1517,7 +1524,7 @@ function renderDatabase(){
   const bedOptions=openBeds.map(x=>`<option value="${esc(x.property.id)}::${esc(x.room.room)}">${esc(x.property.address)} • Room ${esc(x.room.room)}</option>`).join('');
   view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Encrypted Database Transfer</div><div class="muted">Portable database backups are encrypted and restricted in-app to Shawnee Counseling Center work email addresses.</div></div>${nameRevealButton()}</div>
   <div class="formgrid database-transfer-grid">
-    <div class="field"><label>Work Email Recipient</label><input id="databaseWorkEmail" type="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}"><div class="field-help">Only @${WORK_EMAIL_DOMAIN} addresses are accepted by the app.</div></div>
+    <div class="field"><label>Work Email Recipient</label><input id="databaseWorkEmail" type="text" inputmode="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}"><div class="field-help">Only @${WORK_EMAIL_DOMAIN} addresses are accepted by the app.</div></div>
   </div>
   <div class="actions"><button class="btn primary" id="emailDatabase">Email Encrypted Database</button><label class="btn" for="importData">Import Encrypted Database</label><input id="importData" type="file" accept=".sccbackup,.json,application/json,application/octet-stream" style="display:none"></div>
   <div class="notice">Export asks for your app PIN, then a separate transfer password. The transfer password should be given to the recipient separately. On iPhone, choose Mail in the system share sheet and send only to the approved work recipient.</div>
@@ -1549,8 +1556,8 @@ function renderSettings(){
   <section class="panel"><div class="formgrid">
     <div class="field"><label>Authorized User Name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
     <div class="field"><label>Authorized User Cell Number</label><input id="authorizedUserCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}"></div>
-    <div class="field"><label>Work Email</label><input id="userWorkEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
-    <div class="field"><label>Confirm Work Email</label><input id="userWorkEmailConfirm" type="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
+    <div class="field"><label>Work Email</label><div class="work-email-rule">Must end exactly in <b>@${WORK_EMAIL_DOMAIN}</b></div><input id="userWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+    <div class="field"><label>Confirm Work Email</label><input id="userWorkEmailConfirm" type="text" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
     <div class="field"><label>Organization</label><input id="organization" value="${esc(s.organization)}"></div>
     <div class="field"><label>Report recipient label</label><input id="reportLabel" value="${esc(s.reportTextLabel)}"></div>
     <div class="field"><label>Report Text Cell Number</label><input id="reportNumber" type="tel" inputmode="tel" value="${esc(fmtPhone(s.reportTextNumber))}"></div>
@@ -1560,11 +1567,11 @@ function renderSettings(){
   document.getElementById('saveSettings').onclick=async()=>{
     const reporterName=document.getElementById('reporterName').value.trim();
     const authorizedUserCell=digits(document.getElementById('authorizedUserCell').value);
-    const userWorkEmail=document.getElementById('userWorkEmail').value.trim().toLowerCase();
-    const userWorkEmailConfirm=document.getElementById('userWorkEmailConfirm').value.trim().toLowerCase();
+    const userWorkEmail=normalizeWorkEmail(document.getElementById('userWorkEmail').value);
+    const userWorkEmailConfirm=normalizeWorkEmail(document.getElementById('userWorkEmailConfirm').value);
     if(!reporterName){alert('Enter the Authorized User Name.');return}
     if(authorizedUserCell.length<10){alert('Enter the Authorized User Cell Number.');return}
-    if(!validWorkEmail(userWorkEmail)){alert(`Work Email must end in @${WORK_EMAIL_DOMAIN}.`);return}
+    if(!validWorkEmail(userWorkEmail)){alert(`Work Email must end exactly in @${WORK_EMAIL_DOMAIN}.`);return}
     if(userWorkEmail!==userWorkEmailConfirm){alert('Work Email entries do not match.');return}
     s.reporterName=reporterName;s.authorizedUserCell=authorizedUserCell;s.userWorkEmail=userWorkEmail;s.profileComplete=true;s.organization=document.getElementById('organization').value.trim()||'Organization';
     s.reportTextLabel=document.getElementById('reportLabel').value.trim()||'Report Recipient';s.reportTextNumber=digits(document.getElementById('reportNumber').value);
