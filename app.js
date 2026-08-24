@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.10';
+const VERSION='1.6.11';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -93,8 +93,9 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:25,
+    schemaVersion:26,
     properties:[],
+    clients:[],
     inactiveClients:[],
     locations:[],
     route:{stops:[],startMode:'current',startLocationId:'',runIndex:0,runStartAddress:'',runStartLabel:''},
@@ -160,6 +161,90 @@ function normalizeInactiveClient(c,i){
     inactiveAt:c?.inactiveAt||new Date().toISOString()
   };
 }
+
+function normalizeRegistryClient(c,i,statusDefault='active'){
+  return {
+    clientId:String(c?.clientId||('client_'+i+'_'+Date.now())),
+    name:c?.name||'Unnamed Client',
+    phone:c?.phone||'',
+    color:['green','gray'].includes(c?.color)?c.color:'',
+    note:c?.note||'',
+    checkRequired:(typeof c?.checkRequired==='boolean'?c.checkRequired:!['green','gray'].includes(c?.color)),
+    workSchedule:c?.workSchedule||'',
+    schoolSchedule:c?.schoolSchedule||'',
+    importantInfo:c?.importantInfo||'',
+    status:c?.status==='inactive'?'inactive':statusDefault,
+    previousAddress:c?.previousAddress||'',
+    previousRoom:String(c?.previousRoom||''),
+    inactiveAt:c?.inactiveAt||'',
+    createdAt:c?.createdAt||new Date().toISOString(),
+    updatedAt:c?.updatedAt||new Date().toISOString()
+  };
+}
+function clientById(id){return (state?.clients||[]).find(c=>c.clientId===id)||null}
+function clientAssignment(id){
+  if(!id||!state)return null;
+  for(const p of state.properties)for(const r of p.rooms)if(r.type==='client'&&r.clientId===id)return {property:p,room:r};
+  return null;
+}
+function syncRoomFromClient(r,c){
+  if(!r||!c)return r;
+  Object.assign(r,{
+    type:'client',clientId:c.clientId,name:c.name,phone:c.phone,color:c.color,note:c.note,
+    checkRequired:c.checkRequired,workSchedule:c.workSchedule||'',schoolSchedule:c.schoolSchedule||'',
+    importantInfo:c.importantInfo||''
+  });
+  return r;
+}
+function registryClientFromRoom(r,address='',room=''){
+  return normalizeRegistryClient({
+    clientId:r.clientId||uuid(),name:r.name,phone:r.phone,color:r.color,note:r.note,
+    checkRequired:r.checkRequired,workSchedule:r.workSchedule,schoolSchedule:r.schoolSchedule,
+    importantInfo:r.importantInfo,previousAddress:address,previousRoom:room||r.room,status:'active'
+  },0,'active');
+}
+function ensureRegistryClientForRoom(r,address='',room=''){
+  if(!r||r.type!=='client')return null;
+  if(!r.clientId)r.clientId=uuid();
+  let c=(state?.clients||[]).find(x=>x.clientId===r.clientId);
+  if(!c){
+    c=registryClientFromRoom(r,address,room);
+    state.clients.push(c);
+  }
+  c.status='active';c.updatedAt=new Date().toISOString();
+  syncRoomFromClient(r,c);
+  return c;
+}
+function unassignRoomClient(p,r){
+  if(!r||r.type!=='client')return null;
+  const c=clientById(r.clientId)||ensureRegistryClientForRoom(r,p?.address||'',r.room);
+  if(c){
+    c.status='active';
+    c.previousAddress=p?.address||c.previousAddress||'';
+    c.previousRoom=String(r.room||c.previousRoom||'');
+    c.inactiveAt='';
+    c.updatedAt=new Date().toISOString();
+  }
+  Object.assign(r,{type:'open',name:'OPEN',phone:'',color:'',note:'',checkRequired:false,clientId:'',workSchedule:'',schoolSchedule:'',importantInfo:''});
+  if(p)delete state.currentRun.checks[checkKey(p.id,r.room)];
+  return c;
+}
+function activeRegistryClients(){return (state?.clients||[]).filter(c=>c.status!=='inactive')}
+function inactiveRegistryClients(){return (state?.clients||[]).filter(c=>c.status==='inactive')}
+function unassignedActiveClients(){
+  const assigned=new Set(activeClientRecords().map(x=>x.room.clientId).filter(Boolean));
+  return activeRegistryClients().filter(c=>!assigned.has(c.clientId));
+}
+function clientHousingLabel(c){
+  const a=clientAssignment(c?.clientId);
+  return a?`${a.property.address} • Room ${a.room.room}`:'UNASSIGNED';
+}
+function upsertRegistryClient(c){
+  state.clients=Array.isArray(state.clients)?state.clients:[];
+  const ix=state.clients.findIndex(x=>x.clientId===c.clientId);
+  if(ix>=0)state.clients[ix]=c;else state.clients.push(c);
+  return c;
+}
 function clientRecordFromRoom(r,address='',room=''){
   return normalizeInactiveClient({
     clientId:r.clientId||uuid(),
@@ -171,10 +256,18 @@ function clientRecordFromRoom(r,address='',room=''){
   },0);
 }
 function archiveClient(r,address='',room=''){
+  // Housing no longer deactivates people. Leaving a room makes the client ACTIVE • UNASSIGNED.
   if(!r||r.type!=='client')return;
-  const rec=clientRecordFromRoom(r,address,room);
-  const ix=state.inactiveClients.findIndex(c=>c.clientId===rec.clientId);
-  if(ix>=0)state.inactiveClients[ix]=rec;else state.inactiveClients.push(rec);
+  let c=clientById(r.clientId);
+  if(!c){
+    c=registryClientFromRoom(r,address,room);
+    upsertRegistryClient(c);
+  }
+  c.status='active';
+  c.previousAddress=address||c.previousAddress||'';
+  c.previousRoom=String(room||r.room||c.previousRoom||'');
+  c.inactiveAt='';
+  c.updatedAt=new Date().toISOString();
 }
 function activeClientRecords(){
   const out=[];
@@ -190,7 +283,30 @@ function availableOpenBeds(){
 function normalizeState(raw){
   const d=defaultState(), s=raw&&typeof raw==='object'?raw:{};
   d.properties=Array.isArray(s.properties)?s.properties.map(normalizeProperty):[];
-  d.inactiveClients=Array.isArray(s.inactiveClients)?s.inactiveClients.map(normalizeInactiveClient):[];
+  const legacyInactive=Array.isArray(s.inactiveClients)?s.inactiveClients.map(normalizeInactiveClient):[];
+  d.clients=Array.isArray(s.clients)?s.clients.map((c,i)=>normalizeRegistryClient(c,i,c?.status==='inactive'?'inactive':'active')):[];
+  // Schema 26 migration: every person becomes one central client record. Rooms only reference that record.
+  for(const old of legacyInactive){
+    if(!d.clients.some(c=>c.clientId===old.clientId))d.clients.push(normalizeRegistryClient({...old,status:'inactive'},d.clients.length,'inactive'));
+  }
+  for(const prop of d.properties){
+    for(const room of prop.rooms){
+      if(room.type!=='client')continue;
+      if(!room.clientId)room.clientId=uuid();
+      let c=d.clients.find(x=>x.clientId===room.clientId);
+      if(!c){
+        c=normalizeRegistryClient({
+          clientId:room.clientId,name:room.name,phone:room.phone,color:room.color,note:room.note,
+          checkRequired:room.checkRequired,workSchedule:room.workSchedule,schoolSchedule:room.schoolSchedule,
+          importantInfo:room.importantInfo,status:'active',previousAddress:prop.address,previousRoom:room.room
+        },d.clients.length,'active');
+        d.clients.push(c);
+      }
+      c.status='active';c.inactiveAt='';
+      syncRoomFromClient(room,c);
+    }
+  }
+  d.inactiveClients=d.clients.filter(c=>c.status==='inactive').map((c,i)=>normalizeInactiveClient(c,i)); // legacy export compatibility only
   d.locations=Array.isArray(s.locations)?s.locations.map((l,i)=>({
     id:String(l?.id??('l'+i+'_'+Date.now())),name:l?.name??'Unnamed Location',address:l?.address??'',
     type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase,
@@ -253,7 +369,8 @@ function normalizeState(raw){
         if(!r.checkRequired)delete d.currentRun.checks[checkKey(p.id,r.room)];
       }
     }
-    for(const c of d.inactiveClients)c.checkRequired=!['green','gray'].includes(c.color);
+    for(const c of d.clients)c.checkRequired=!['green','gray'].includes(c.color);
+    d.inactiveClients=d.clients.filter(c=>c.status==='inactive').map((c,i)=>normalizeInactiveClient(c,i));
   }
   if(Number(s.schemaVersion||0)<6){
     for(const p of d.properties){
@@ -262,7 +379,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=25;
+  d.schemaVersion=26;
   return d;
 }
 function getCheck(pid,room){
@@ -365,7 +482,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:25});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:26});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -655,6 +772,9 @@ function drawNav(){
       if(next==='codes'){
         if(!await requestPin('view the full lock-code list'))return;
         codesUnlocked=true;
+      }
+      if(next==='search'){
+        if(!await requestPin('enter CLIENT • SECURE'))return;
       }
       if(next==='report')reportOrigin='menu';
       if(next==='inspections'){
@@ -1262,7 +1382,7 @@ function renderProperties(){
   view.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{
     const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p)return;
     if(!await requestPin(`remove ${p.address}`))return;
-    if(!confirm(`Remove ${p.address}? Clients will be retained in the Inactive Client Registry.`))return;
+    if(!confirm(`Remove ${p.address}? Assigned clients will become ACTIVE • UNASSIGNED. Their client profiles will be retained.`))return;
     p.rooms.filter(r=>r.type==='client').forEach(r=>archiveClient(r,p.address,r.room));
     state.properties=state.properties.filter(x=>x.id!==p.id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='property'&&s.id===p.id));await saveState();renderProperties();
   });
@@ -1273,17 +1393,62 @@ function renderProperties(){
   };
   if(editPropertyId)renderPropertyEditor(state.properties.find(p=>p.id===editPropertyId));
 }
-function roomEditorHtml(r,i){
-  return `<div class="roomedit" data-row="${i}">
-    <input data-f="room" value="${esc(r.room)}" aria-label="Room">
-    <select data-f="type"><option value="client" ${r.type==='client'?'selected':''}>Client</option><option value="open" ${r.type==='open'?'selected':''}>Open</option><option value="nobed" ${r.type==='nobed'?'selected':''}>No Bed</option></select>
-    <input data-f="name" value="${esc(r.type==='client'?(showFullNames?r.name:maskClientName(r.name)):'')}" data-fullname="${esc(r.name||'')}" placeholder="Client name">
-    <input class="wide" data-f="phone" value="${esc(r.phone||'')}" placeholder="Cell phone">
-    <select data-f="required" aria-label="House inspection requirement"><option value="required" ${r.checkRequired!==false?'selected':''}>Inspection REQUIRED</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Inspection NOT REQUIRED</option></select>
-    <select data-f="color"><option value="" ${!r.color?'selected':''}>No color</option><option value="green" ${r.color==='green'?'selected':''}>Green</option><option value="gray" ${r.color==='gray'?'selected':''}>Gray</option></select>
-    <button class="btn red" data-remove="${i}">Remove</button>
-    ${r.type==='client'?`<textarea class="room-work" data-f="workSchedule" placeholder="Work schedule, e.g. Mon–Fri 4 PM–12 AM">${esc(r.workSchedule||'')}</textarea>`:''}
+function roomEditorHtml(p,r,i){
+  const c=r.type==='client'?(clientById(r.clientId)||registryClientFromRoom(r,p.address,r.room)):null;
+  const assignmentHtml=r.type==='client'
+    ? `<div class="housing-assignment-card">
+        <div><b>${esc(c?.name||r.name||'Unnamed Client')}</b><div class="meta">ACTIVE • ASSIGNED • ${c?.checkRequired!==false?'Inspection Required':'Inspection Not Required'}</div></div>
+        <div class="actions"><button class="btn" data-viewassigned="${i}">View Client</button><button class="btn red" data-unassign="${i}">Unassign</button></div>
+      </div>`
+    : r.type==='open'
+      ? `<div class="housing-assignment-card open-assignment"><div><b>OPEN BED</b><div class="meta">Assign an existing ACTIVE • UNASSIGNED client.</div></div><button class="btn primary" data-assign="${i}">Assign Client</button></div>`
+      : `<div class="housing-assignment-card no-bed-assignment"><div><b>NO BED</b><div class="meta">This room is not currently available for assignment.</div></div></div>`;
+  return `<div class="roomedit housing-room-row" data-row="${i}">
+    <div class="field"><label>Room</label><input data-f="room" value="${esc(r.room)}" aria-label="Room"></div>
+    <div class="field"><label>Bed Status</label><select data-f="bedstatus">
+      ${r.type==='client'?`<option value="client" selected>Client Assigned</option>`:''}
+      <option value="open" ${r.type==='open'?'selected':''}>Open</option>
+      <option value="nobed" ${r.type==='nobed'?'selected':''}>No Bed</option>
+    </select></div>
+    <div class="housing-assignment-wide">${assignmentHtml}</div>
+    <button class="btn red" data-remove="${i}">Remove Bed</button>
   </div>`;
+}
+function assignClientPicker(p,r){
+  const wrap=document.createElement('div');wrap.className='pin-overlay';
+  let q='';
+  const draw=()=>{
+    const candidates=unassignedActiveClients().filter(c=>{
+      const s=String(q||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+      if(s.length<3)return false;
+      return clientSearchKey(c.name).includes(s);
+    });
+    wrap.innerHTML=`<div class="pin-dialog client-assignment-dialog">
+      <div class="title">Assign Client • ${esc(p.address)} • Room ${esc(r.room)}</div>
+      <div class="muted">Search the existing client registry. New clients are created in CLIENT • SECURE first.</div>
+      <div class="searchbar"><input id="housingClientSearch" autocomplete="off" placeholder="Type any 3 letters" value="${esc(q)}"><button class="btn" id="housingAssignCancel">Cancel</button></div>
+      <div class="registry-list housing-client-results">${
+        String(q).replace(/[^a-z0-9]/gi,'').length<3
+          ? '<div class="muted">Enter at least 3 letters.</div>'
+          : candidates.length
+            ? candidates.map((c,i)=>`<button class="housing-client-choice" data-pickclient="${i}"><b>${esc(c.name)}</b><span>${esc(c.phone?fmtPhone(c.phone):'No phone entered')}</span><small>${c.checkRequired!==false?'Inspection REQUIRED':'Inspection NOT REQUIRED'}</small></button>`).join('')
+            : '<div class="muted">No ACTIVE • UNASSIGNED client matches that search.</div>'
+      }</div>
+    </div>`;
+    const input=wrap.querySelector('#housingClientSearch');
+    input.oninput=()=>{q=input.value;draw();const again=wrap.querySelector('#housingClientSearch');again?.focus();again?.setSelectionRange(again.value.length,again.value.length)};
+    input.focus();
+    wrap.querySelector('#housingAssignCancel').onclick=()=>wrap.remove();
+    wrap.querySelectorAll('[data-pickclient]').forEach(b=>b.onclick=async()=>{
+      const c=candidates[+b.dataset.pickclient];if(!c)return;
+      if(clientAssignment(c.clientId)){alert('That client was assigned elsewhere. Search again.');draw();return}
+      syncRoomFromClient(r,c);
+      c.status='active';c.inactiveAt='';c.updatedAt=new Date().toISOString();
+      state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+      await saveState();wrap.remove();renderPropertyEditor(p);
+    });
+  };
+  document.body.appendChild(wrap);draw();
 }
 function renderPropertyEditor(p){
   if(!p)return;
@@ -1293,29 +1458,51 @@ function renderPropertyEditor(p){
       <div class="field"><label>Address</label><input id="propAddress" value="${esc(p.address)}"></div>
       <div class="field"><label>Door code</label><input id="propCode" value="${esc(p.doorCode)}"><div class="field-help">${p.doorCodeUpdatedAt?`Last changed ${esc(new Date(p.doorCodeUpdatedAt).toLocaleString())}`:'No change date recorded yet.'}</div></div>
       <div class="field"><label>Number of beds</label><input id="propBeds" type="number" min="1" max="60" value="${p.beds}"></div>
-      <div class="field"><label>Property situation</label><select id="propSituation">${Object.entries(PROPERTY_SITUATIONS).map(([k,v])=>`<option value="${k}" ${p.propertyStatus===k?'selected':''}>${esc(v.label)}</option>`).join('')}</select><div class="field-help">Color is assigned automatically from the situation. It is not a free-choice decoration.</div></div>
+      <div class="field"><label>Property situation</label><select id="propSituation">${Object.entries(PROPERTY_SITUATIONS).map(([k,v])=>`<option value="${k}" ${p.propertyStatus===k?'selected':''}>${esc(v.label)}</option>`).join('')}</select><div class="field-help">Color is assigned automatically from the situation.</div></div>
       <label class="checkboxline"><input id="propRequired" type="checkbox" ${p.checkRequired!==false?'checked':''}> House participates in checks</label>
     </div>
-    <div class="notice"><b>Client House-Inspection Requirement:</b> use the REQUIRED / NOT REQUIRED selector on each client record. NOT REQUIRED clients remain visible during the house visit but are read-only and marked DO NOT DISTURB. Original highlighted clients migrate to NOT REQUIRED automatically.</div>
-    <h3>Beds / Rooms</h3>${p.rooms.map(roomEditorHtml).join('')}
+    <div class="notice"><b>Housing rule:</b> clients are created and maintained in CLIENT • SECURE. This screen only assigns an existing client to a room, unassigns them, or changes the bed status.</div>
+    <h3>Beds / Rooms</h3>${p.rooms.map((r,i)=>roomEditorHtml(p,r,i)).join('')}
     <div class="actions"><button class="btn" id="addBed">+ Bed</button><button class="btn primary" id="saveProperty">Save Property</button><button class="btn" id="cancelProperty">Cancel</button></div>
   </section>`;
-  document.getElementById('propBeds').onchange=()=>{
+  document.getElementById('propBeds').onchange=async()=>{
     const input=document.getElementById('propBeds'),n=Math.max(1,Math.min(60,+input.value||1));
     if(n<p.rooms.length){
       const occupied=p.rooms.slice(n).filter(r=>r.type==='client');
-      if(occupied.length&&!confirm(`Reducing capacity moves these clients to Inactive: ${occupied.map(r=>displayClientName(r.name)).join(', ')}. Continue?`)){input.value=p.rooms.length;return}
-      occupied.forEach(r=>archiveClient(r,p.address,r.room));
+      if(occupied.length&&!confirm(`Reducing capacity will UNASSIGN: ${occupied.map(r=>displayClientName(r.name)).join(', ')}. Their client profiles will remain ACTIVE. Continue?`)){input.value=p.rooms.length;return}
+      occupied.forEach(r=>unassignRoomClient(p,r));
       p.rooms=p.rooms.slice(0,n);
-    }else while(p.rooms.length<n)p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:true},p.rooms.length));
-    p.beds=p.rooms.length;renderPropertyEditor(p);
+    }else while(p.rooms.length<n)p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:false},p.rooms.length));
+    p.beds=p.rooms.length;await saveState();renderPropertyEditor(p);
   };
-  document.getElementById('addBed').onclick=()=>{p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:true},p.rooms.length));p.beds=p.rooms.length;renderPropertyEditor(p)};
-  e.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
+  document.getElementById('addBed').onclick=async()=>{
+    p.rooms.push(normalizeRoom({room:p.rooms.length+1,type:'open',name:'OPEN',checkRequired:false},p.rooms.length));
+    p.beds=p.rooms.length;await saveState();renderPropertyEditor(p);
+  };
+  e.querySelectorAll('[data-assign]').forEach(b=>b.onclick=()=>{const r=p.rooms[+b.dataset.assign];if(r?.type==='open')assignClientPicker(p,r)});
+  e.querySelectorAll('[data-viewassigned]').forEach(b=>b.onclick=()=>{const r=p.rooms[+b.dataset.viewassigned],c=r?clientById(r.clientId):null;if(c)showSecureClientProfile(c)});
+  e.querySelectorAll('[data-unassign]').forEach(b=>b.onclick=async()=>{
+    const r=p.rooms[+b.dataset.unassign];if(!r||r.type!=='client')return;
+    if(!confirm(`Unassign ${displayClientName(r.name)} from ${p.address} Room ${r.room}? Their client profile remains ACTIVE.`))return;
+    unassignRoomClient(p,r);state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+    await saveState();renderPropertyEditor(p);
+  });
+  e.querySelectorAll('[data-f="bedstatus"]').forEach(sel=>sel.onchange=async()=>{
+    const row=sel.closest('[data-row]'),r=p.rooms[+row.dataset.row],next=sel.value;
+    if(r.type==='client'&&next!=='client'){
+      if(!confirm(`Unassign ${displayClientName(r.name)} and mark this room ${next==='open'?'OPEN':'NO BED'}?`)){renderPropertyEditor(p);return}
+      unassignRoomClient(p,r);
+      if(next==='nobed')Object.assign(r,{type:'nobed',name:'NO BED',checkRequired:false});
+    }else if(r.type!=='client'){
+      Object.assign(r,{type:next,name:next==='open'?'OPEN':'NO BED',phone:'',color:'',note:'',checkRequired:false,clientId:'',workSchedule:'',schoolSchedule:'',importantInfo:''});
+    }
+    await saveState();renderPropertyEditor(p);
+  });
+  e.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{
     const r=p.rooms[+b.dataset.remove];
-    if(r.type==='client'&&!confirm(`Move ${displayClientName(r.name)} to Inactive and remove this bed/room row?`))return;
-    if(r.type==='client')archiveClient(r,p.address,r.room);
-    p.rooms.splice(+b.dataset.remove,1);p.beds=p.rooms.length;renderPropertyEditor(p);
+    if(r.type==='client'&&!confirm(`Remove this bed/room row and UNASSIGN ${displayClientName(r.name)}? The client profile will remain ACTIVE.`))return;
+    if(r.type==='client')unassignRoomClient(p,r);
+    p.rooms.splice(+b.dataset.remove,1);p.beds=p.rooms.length;await saveState();renderPropertyEditor(p);
   });
   document.getElementById('cancelProperty').onclick=()=>{editPropertyId=null;renderProperties()};
   document.getElementById('saveProperty').onclick=async()=>{
@@ -1327,32 +1514,22 @@ function renderPropertyEditor(p){
     p.houseColor=propertySituation(p).color;
     p.checkRequired=document.getElementById('propRequired').checked;
     e.querySelectorAll('[data-row]').forEach(row=>{
-      const r=p.rooms[+row.dataset.row],previous=deepClone(r),nextType=row.querySelector('[data-f="type"]').value;
-      if(previous.type==='client'&&nextType!=='client')archiveClient(previous,p.address,previous.room);
-      r.room=row.querySelector('[data-f="room"]').value.trim()||String(+row.dataset.row+1);r.type=nextType;
+      const r=p.rooms[+row.dataset.row];
+      r.room=row.querySelector('[data-f="room"]').value.trim()||String(+row.dataset.row+1);
       if(r.type==='client'){
-        const nameInput=row.querySelector('[data-f="name"]'),typed=nameInput.value.trim(),original=nameInput.dataset.fullname||'';
-        r.name=(!showFullNames && typed===maskClientName(original)) ? original : (typed||'Unnamed Client');
-        r.checkRequired=row.querySelector('[data-f="required"]').value!=='notrequired';
-        if(!r.checkRequired)delete state.currentRun.checks[checkKey(p.id,r.room)];
-        if(!r.clientId)r.clientId=uuid();
-        r.workSchedule=row.querySelector('[data-f="workSchedule"]')?.value.trim()||r.workSchedule||'';
-        r.schoolSchedule=r.schoolSchedule||'';
-        r.importantInfo=r.importantInfo||'';
-      }else{r.name=r.type==='open'?'OPEN':'NO BED';r.checkRequired=false;r.clientId='';r.workSchedule=''}
-      r.phone=r.type==='client'?row.querySelector('[data-f="phone"]').value.trim():'';r.color=r.type==='client'?row.querySelector('[data-f="color"]').value:'';
+        const c=clientById(r.clientId);if(c)syncRoomFromClient(r,c);
+      }
     });
     p.beds=p.rooms.length;await saveState();editPropertyId=null;renderProperties();
   };
 }
 
-
-/* ---------- Dedicated Client Profiles ---------- */
+/* ---------- Dedicated Client Profiles / Secure Client Registry ---------- */
 function allClientProfileRecords(){
-  const out=[];
-  for(const p of state.properties)for(const r of p.rooms)if(r.type==='client')out.push({kind:'active',property:p,record:r});
-  for(const c of state.inactiveClients||[])out.push({kind:'inactive',property:null,record:c});
-  return out;
+  return (state.clients||[]).map(c=>{
+    const a=clientAssignment(c.clientId);
+    return {kind:c.status==='inactive'?'inactive':(a?'active':'unassigned'),property:a?.property||null,room:a?.room||null,record:c};
+  });
 }
 function profileSearchMatches(item,q){
   const s=String(q||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
@@ -1360,13 +1537,63 @@ function profileSearchMatches(item,q){
   const key=clientSearchKey(item.record.name);
   return key.includes(s)||s.includes(key)||String(item.record.phone||'').replace(/\D/g,'').includes(s);
 }
-function inactiveProfileModal(c){
+function syncAssignedRoomForClient(c){
+  const a=clientAssignment(c.clientId);
+  if(a)syncRoomFromClient(a.room,c);
+}
+function clientProfileFormHtml(c={},mode='edit'){
+  return `<div class="formgrid profile-edit-grid">
+    <div class="field"><label>Full Client Name</label><input id="cpName" value="${esc(c.name||'')}" placeholder="Full legal / roster name"></div>
+    <div class="field"><label>Cell Phone</label><input id="cpPhone" type="tel" value="${esc(c.phone||'')}"></div>
+    <div class="field"><label>House Inspection</label><select id="cpRequired"><option value="required" ${c.checkRequired!==false?'selected':''}>Inspection REQUIRED</option><option value="notrequired" ${c.checkRequired===false?'selected':''}>Inspection NOT REQUIRED</option></select></div>
+    <div class="field profile-wide"><label>Work Schedule</label><textarea id="cpWork" placeholder="Work days / hours">${esc(c.workSchedule||'')}</textarea></div>
+    <div class="field profile-wide"><label>School Schedule</label><textarea id="cpSchool" placeholder="School days / hours / campus details">${esc(c.schoolSchedule||'')}</textarea></div>
+    <div class="field profile-wide"><label>Important Information</label><textarea id="cpInfo" placeholder="Important information for transportation / house checks">${esc(c.importantInfo||'')}</textarea></div>
+    <div class="field profile-wide"><label>Profile Note</label><textarea id="cpNote" placeholder="Permanent profile note">${esc(c.note||'')}</textarea></div>
+  </div>`;
+}
+function readClientProfileForm(wrap,c){
+  c.name=wrap.querySelector('#cpName').value.trim()||'Unnamed Client';
+  c.phone=wrap.querySelector('#cpPhone').value.trim();
+  c.checkRequired=wrap.querySelector('#cpRequired').value==='required';
+  c.workSchedule=wrap.querySelector('#cpWork').value.trim();
+  c.schoolSchedule=wrap.querySelector('#cpSchool').value.trim();
+  c.importantInfo=wrap.querySelector('#cpInfo').value.trim();
+  c.note=wrap.querySelector('#cpNote').value.trim();
+  c.updatedAt=new Date().toISOString();
+  return c;
+}
+async function createNewClient(){
+  if(!await requestPin('create a new client profile'))return;
   const wrap=document.createElement('div');wrap.className='pin-overlay';
+  const c=normalizeRegistryClient({clientId:uuid(),status:'active',checkRequired:true,createdAt:new Date().toISOString()},state.clients.length,'active');
+  wrap.innerHTML=`<div class="pin-dialog client-edit-dialog">
+    <div class="title">New Client</div>
+    <div class="muted">Create the person here first. Housing assignment comes later from PROPERTIES.</div>
+    ${clientProfileFormHtml(c,'new')}
+    <div class="actions"><button class="btn" id="cancelClientCreate">Cancel</button><button class="btn primary" id="saveClientCreate">Create Client • Unassigned</button></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('#cancelClientCreate').onclick=()=>wrap.remove();
+  wrap.querySelector('#saveClientCreate').onclick=async()=>{
+    readClientProfileForm(wrap,c);
+    if(!c.name||c.name==='Unnamed Client'){alert('Enter the client name.');return}
+    c.status='active';c.inactiveAt='';upsertRegistryClient(c);
+    state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+    await saveState();wrap.remove();clientSearchQuery=c.name.slice(0,3);renderClientSearch();
+  };
+}
+function showSecureClientProfile(c){
+  const a=clientAssignment(c.clientId),inactive=c.status==='inactive';
+  const wrap=document.createElement('div');wrap.className='pin-overlay';
+  const residence=inactive
+    ? `Last: ${c.previousAddress||'Unknown'}${c.previousRoom?` • Room ${c.previousRoom}`:''}`
+    : a?`${a.property.address} • Room ${a.room.room}`:'ACTIVE • UNASSIGNED';
   wrap.innerHTML=`<div class="pin-dialog client-profile-dialog">
-    <div class="title">Client Record • ${esc(displayClientName(c.name))}</div>
+    <div class="title">Client Record • ${esc(String(c.name||''))}</div>
     <div class="profile-grid">
-      <div><b>Status</b><span>INACTIVE</span></div>
-      <div><b>Last Residence</b><span>${esc(c.previousAddress||'Unknown')}${c.previousRoom?` • Room ${esc(c.previousRoom)}`:''}</span></div>
+      <div><b>Status</b><span class="${inactive?'profile-notrequired':'profile-required'}">${inactive?'INACTIVE':(a?'ACTIVE • HOUSED':'ACTIVE • UNASSIGNED')}</span></div>
+      <div><b>Housing</b>${a?`<a class="client-address-link" id="secureClientMap" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.property.address)}&travelmode=driving&dir_action=navigate">📍 ${esc(a.property.address)} • Room ${esc(a.room.room)}</a>`:`<span>${esc(residence)}</span>`}</div>
       <div><b>Phone</b><span>${c.phone?esc(fmtPhone(c.phone)):'Not entered'}</span></div>
       <div><b>House Inspection</b><span class="${c.checkRequired!==false?'profile-required':'profile-notrequired'}">${c.checkRequired!==false?'REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</span></div>
       <div class="profile-wide"><b>Work Schedule</b><span>${esc(c.workSchedule||'No work schedule entered.')}</span></div>
@@ -1374,54 +1601,61 @@ function inactiveProfileModal(c){
       <div class="profile-wide"><b>Important Information</b><span>${esc(c.importantInfo||'No additional important information entered.')}</span></div>
       <div class="profile-wide"><b>Profile Note</b><span>${esc(c.note||'No profile note entered.')}</span></div>
     </div>
-    <div class="actions"><button class="btn primary" id="closeInactiveProfile">Close</button></div>
+    <div class="actions">
+      <button class="btn" id="closeSecureClient">Close</button>
+      <button class="btn primary" id="editSecureClient">Edit Client</button>
+      ${inactive?`<button class="btn primary" id="reactivateSecureClient">Reactivate • Unassigned</button>`:`<button class="btn red" id="deactivateSecureClient">Deactivate Client</button>`}
+    </div>
   </div>`;
   document.body.appendChild(wrap);
-  wrap.querySelector('#closeInactiveProfile').onclick=()=>wrap.remove();
+  wrap.querySelector('#secureClientMap')?.addEventListener('click',e=>{e.preventDefault();openClientAddressGoogleMaps(a.property.address)});
+  wrap.querySelector('#closeSecureClient').onclick=()=>wrap.remove();
+  wrap.querySelector('#editSecureClient').onclick=()=>{wrap.remove();editClientProfile({record:c})};
+  if(inactive){
+    wrap.querySelector('#reactivateSecureClient').onclick=async()=>{
+      if(!await requestPin('reactivate this client'))return;
+      c.status='active';c.inactiveAt='';c.updatedAt=new Date().toISOString();
+      state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+      await saveState();wrap.remove();renderClientSearch();
+    };
+  }else{
+    wrap.querySelector('#deactivateSecureClient').onclick=async()=>{
+      if(!await requestPin('deactivate this client'))return;
+      if(!confirm(`Deactivate ${displayClientName(c.name)}?${a?' Their current room will become OPEN.':''}`))return;
+      const current=clientAssignment(c.clientId);
+      if(current)unassignRoomClient(current.property,current.room);
+      c.status='inactive';c.inactiveAt=new Date().toISOString();c.updatedAt=new Date().toISOString();
+      state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+      await saveState();wrap.remove();renderClientSearch();
+    };
+  }
   wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};
 }
 async function editClientProfile(item){
   if(!await requestPin('edit this client profile'))return;
-  const r=item.record,where=item.kind==='active'?`${item.property.address} • Room ${r.room}`:`Inactive • Last: ${r.previousAddress||'Unknown'}${r.previousRoom?' • Room '+r.previousRoom:''}`;
+  const c=item.record;
+  const a=clientAssignment(c.clientId);
+  const where=c.status==='inactive'
+    ? `INACTIVE • Last: ${c.previousAddress||'Unknown'}${c.previousRoom?' • Room '+c.previousRoom:''}`
+    : a?`${a.property.address} • Room ${a.room.room}`:'ACTIVE • UNASSIGNED';
   const wrap=document.createElement('div');wrap.className='pin-overlay';
   wrap.innerHTML=`<div class="pin-dialog client-edit-dialog">
     <div class="title">Edit Client Profile</div><div class="muted">${esc(where)}</div>
-    <div class="formgrid profile-edit-grid">
-      <div class="field"><label>Full Client Name</label><input id="cpName" value="${esc(r.name||'')}"></div>
-      <div class="field"><label>Cell Phone</label><input id="cpPhone" type="tel" value="${esc(r.phone||'')}"></div>
-      <div class="field"><label>House Inspection</label><select id="cpRequired"><option value="required" ${r.checkRequired!==false?'selected':''}>Inspection REQUIRED</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Inspection NOT REQUIRED</option></select></div>
-      <div class="field profile-wide"><label>Work Schedule</label><textarea id="cpWork" placeholder="Work days / hours">${esc(r.workSchedule||'')}</textarea></div>
-      <div class="field profile-wide"><label>School Schedule</label><textarea id="cpSchool" placeholder="School days / hours / campus details">${esc(r.schoolSchedule||'')}</textarea></div>
-      <div class="field profile-wide"><label>Important Information</label><textarea id="cpInfo" placeholder="Important information for house checks">${esc(r.importantInfo||'')}</textarea></div>
-      <div class="field profile-wide"><label>Profile Note</label><textarea id="cpNote" placeholder="Permanent profile note">${esc(r.note||'')}</textarea></div>
-    </div>
+    ${clientProfileFormHtml(c)}
     <div class="actions"><button class="btn" id="cancelClientEdit">Cancel</button><button class="btn primary" id="saveClientEdit">Save Client Profile</button></div>
   </div>`;
   document.body.appendChild(wrap);
   wrap.querySelector('#cancelClientEdit').onclick=()=>wrap.remove();
   wrap.querySelector('#saveClientEdit').onclick=async()=>{
-    r.name=wrap.querySelector('#cpName').value.trim()||'Unnamed Client';
-    r.phone=wrap.querySelector('#cpPhone').value.trim();
-    r.checkRequired=wrap.querySelector('#cpRequired').value==='required';
-    r.workSchedule=wrap.querySelector('#cpWork').value.trim();
-    r.schoolSchedule=wrap.querySelector('#cpSchool').value.trim();
-    r.importantInfo=wrap.querySelector('#cpInfo').value.trim();
-    r.note=wrap.querySelector('#cpNote').value.trim();
-    if(item.kind==='active'&&!r.checkRequired)delete state.currentRun.checks[checkKey(item.property.id,r.room)];
-    await saveState();wrap.remove();renderClientProfiles();
+    readClientProfileForm(wrap,c);
+    syncAssignedRoomForClient(c);
+    if(a&&!c.checkRequired)delete state.currentRun.checks[checkKey(a.property.id,a.room.room)];
+    state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
+    await saveState();wrap.remove();renderClientSearch();
   };
 }
-/* ---------- 3x3 Client Search / Unified Client Hub ---------- */
-function clientHubRecords(){
-  const out=[];
-  for(const p of state.properties){
-    for(const r of p.rooms){
-      if(r.type==='client')out.push({kind:'active',property:p,record:r});
-    }
-  }
-  for(const c of state.inactiveClients||[])out.push({kind:'inactive',property:null,record:c});
-  return out;
-}
+/* ---------- 3-letter Client Search / Unified Client Hub ---------- */
+function clientHubRecords(){return allClientProfileRecords()}
 function clientHubMatches(item,query){
   const q=String(query||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
   if(q.length<3)return false;
@@ -1430,41 +1664,50 @@ function clientHubMatches(item,query){
 }
 function renderClientSearch(){
   const view=document.getElementById('view');
+  setModulePrevious(goHome);
   const compact=String(clientSearchQuery||'').replace(/[^a-z0-9]/gi,'');
   const results=compact.length<3?[]:clientHubRecords().filter(x=>clientHubMatches(x,clientSearchQuery));
 
   view.innerHTML=`<section class="panel">
     <div class="titlebar">
       <div>
-        <div class="title">3×3 Client Search</div>
-        <div class="muted">One client search for everything. Search the first 3 letters of the first name + first 3 letters of the last name.</div>
+        <div class="title">CLIENT • SECURE</div>
+        <div class="muted">Create each client once. Search with any 3 letters, then assign housing separately from PROPERTIES.</div>
       </div>
       ${nameRevealButton()}
     </div>
-    <div class="searchbar"><input id="clientSearch" autocomplete="off" placeholder="e.g. Bra Wal" value="${esc(clientSearchQuery)}"><button class="btn" id="clearSearch">Clear</button></div>
-    <div class="privacy-hint">Full names stay hidden by default. Open a client record to view schedules, inspection requirements, and other profile information.</div>
+    <div class="actions client-registry-actions"><button class="btn primary" id="newClient">+ New Client</button></div>
+    <div class="searchbar"><input id="clientSearch" autocomplete="off" placeholder="Type any 3 letters of the name" value="${esc(clientSearchQuery)}"><button class="btn" id="clearSearch">Clear</button></div>
+    <div class="privacy-hint">ACTIVE • UNASSIGNED clients are ready to be placed into an OPEN room from the Housing / Properties module.</div>
   </section>
 
   <section class="search-results">${
     compact.length<3
       ? '<div class="panel"><div class="muted">Enter at least 3 letters to search.</div></div>'
       : results.length
-        ? results.map((x,i)=>`<article class="card search-result client-search-card">
-            <div class="client-search-main">
-              <div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
-              <div class="meta client-location-line">${x.kind==='active'
-                ? `<a class="client-address-link" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(x.property.address)}&travelmode=driving&dir_action=navigate" data-clientnav="${i}">📍 ${esc(x.property.address)}</a><span> • Room ${esc(x.record.room)}</span>`
-                : `INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}${x.record.previousRoom?` • Room ${esc(x.record.previousRoom)}`:''}`}</div>
-              <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div>
-            </div>
-            <div class="actions client-search-actions">
-              <button class="btn" data-viewclient="${i}">View Client</button>
-              <button class="btn primary" data-editclient="${i}">Edit Client</button>
-            </div>
-          </article>`).join('')
+        ? results.map((x,i)=>{
+            const a=clientAssignment(x.record.clientId);
+            const location=x.kind==='inactive'
+              ? `INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}${x.record.previousRoom?` • Room ${esc(x.record.previousRoom)}`:''}`
+              : a
+                ? `<a class="client-address-link" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.property.address)}&travelmode=driving&dir_action=navigate" data-clientnav="${i}">📍 ${esc(a.property.address)}</a><span> • Room ${esc(a.room.room)}</span>`
+                : `<span class="badge">ACTIVE • UNASSIGNED</span>`;
+            return `<article class="card search-result client-search-card">
+              <div class="client-search-main">
+                <div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
+                <div class="meta client-location-line">${location}</div>
+                <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div>
+              </div>
+              <div class="actions client-search-actions">
+                <button class="btn" data-viewclient="${i}">View Client</button>
+                <button class="btn primary" data-editclient="${i}">Edit Client</button>
+              </div>
+            </article>`;
+          }).join('')
         : '<div class="panel"><div class="muted">No matching client found.</div></div>'
   }</section>`;
 
+  document.getElementById('newClient').onclick=createNewClient;
   const input=document.getElementById('clientSearch');
   input.oninput=()=>{
     clientSearchQuery=input.value;
@@ -1474,25 +1717,18 @@ function renderClientSearch(){
     again?.setSelectionRange(again.value.length,again.value.length);
   };
   document.getElementById('clearSearch').onclick=()=>{clientSearchQuery='';renderClientSearch()};
-
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientSearch()};
-
   view.querySelectorAll('[data-viewclient]').forEach(b=>b.onclick=()=>{
-    const x=results[+b.dataset.viewclient];
-    if(!x)return;
-    x.kind==='active'?showClientProfile(x.property,x.record):inactiveProfileModal(x.record);
+    const x=results[+b.dataset.viewclient];if(x)showSecureClientProfile(x.record);
   });
-
   view.querySelectorAll('[data-editclient]').forEach(b=>b.onclick=()=>{
-    const x=results[+b.dataset.editclient];
-    if(x)editClientProfile(x);
+    const x=results[+b.dataset.editclient];if(x)editClientProfile(x);
   });
-
   view.querySelectorAll('[data-clientnav]').forEach(a=>a.onclick=e=>{
     e.preventDefault();
-    const x=results[+a.dataset.clientnav];
-    if(x?.kind==='active'&&x.property?.address)openClientAddressGoogleMaps(x.property.address);
+    const x=results[+a.dataset.clientnav],assignment=x?clientAssignment(x.record.clientId):null;
+    if(assignment?.property?.address)openClientAddressGoogleMaps(assignment.property.address);
   });
 }
 /* ---------- Locations + Route ---------- */
@@ -2270,10 +2506,11 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:25,
+    schemaVersion:26,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
-    inactiveClients:state.inactiveClients,
+    clients:state.clients,
+    inactiveClients:inactiveRegistryClients(),
     locations:state.locations,
     route:state.route,
     savedRoutes:state.savedRoutes,
@@ -2366,7 +2603,7 @@ async function importDatabasePayload(incoming){
     await saveState();
     return;
   }
-  const keepText=state.settings.reportTextNumber,keepInactive=deepClone(state.inactiveClients||[]);
+  const keepText=state.settings.reportTextNumber,keepClients=deepClone(state.clients||[]);
   const localIdentity={
     reporterName:state.settings.reporterName||state.settings.driverName||'',
     authorizedUserCell:state.settings.authorizedUserCell||'',
@@ -2374,7 +2611,18 @@ async function importDatabasePayload(incoming){
     profileComplete:!!state.settings.profileComplete
   };
   state.properties=incoming.properties.map(normalizeProperty);
-  state.inactiveClients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map(normalizeInactiveClient):keepInactive;
+  if(Array.isArray(incoming.clients)){
+    state.clients=incoming.clients.map((c,i)=>normalizeRegistryClient(c,i,c?.status==='inactive'?'inactive':'active'));
+  }else{
+    state.clients=Array.isArray(incoming.inactiveClients)?incoming.inactiveClients.map((c,i)=>normalizeRegistryClient({...c,status:'inactive'},i,'inactive')):keepClients;
+    for(const p of state.properties)for(const r of p.rooms)if(r.type==='client'){
+      if(!r.clientId)r.clientId=uuid();
+      let c=state.clients.find(x=>x.clientId===r.clientId);
+      if(!c){c=registryClientFromRoom(r,p.address,r.room);state.clients.push(c)}
+      c.status='active';syncRoomFromClient(r,c);
+    }
+  }
+  state.inactiveClients=inactiveRegistryClients().map((c,i)=>normalizeInactiveClient(c,i));
   state.locations=Array.isArray(incoming.locations)?incoming.locations.map((l,i)=>({id:String(l?.id??('l'+i+'_'+Date.now())),name:l?.name??'Unnamed Location',address:l?.address??'',type:l?.type??'Other',phone:l?.phone??'',notes:l?.notes??'',isBase:!!l?.isBase,category:l?.category==='business'?'business':'saved'})):[];
   const ir=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
   state.route={stops:deepClone(ir.stops||[]),startMode:ir.startMode==='location'?'location':'current',startLocationId:String(ir.startLocationId||''),runIndex:0,runStartAddress:'',runStartLabel:''};
@@ -2453,18 +2701,22 @@ async function exportPrivateData(){
   alert('Plain JSON export has been disabled. Use Email Encrypted Database for portable transfers.');
 }
 function renderDatabase(){
-  const view=document.getElementById('view'),beds=state.properties.reduce((n,p)=>n+p.beds,0),active=activeClientRecords(),inactive=state.inactiveClients||[],openBeds=availableOpenBeds();
-  const bedOptions=openBeds.map(x=>`<option value="${esc(x.property.id)}::${esc(x.room.room)}">${esc(x.property.address)} • Room ${esc(x.room.room)}</option>`).join('');
+  const view=document.getElementById('view'),beds=state.properties.reduce((n,p)=>n+p.beds,0);
+  const active=activeRegistryClients(),inactive=inactiveRegistryClients(),unassigned=unassignedActiveClients();
+  const assigned=active.filter(c=>!!clientAssignment(c.clientId));
   view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Encrypted Database Transfer</div><div class="muted">Portable database backups are encrypted and restricted in-app to Shawnee Counseling Center work email addresses.</div></div>${nameRevealButton()}</div>
   <div class="formgrid database-transfer-grid">
     <div class="field"><label>Work Email Recipient</label><input id="databaseWorkEmail" type="text" inputmode="email" autocomplete="email" placeholder="name@${WORK_EMAIL_DOMAIN}"><div class="field-help">Only @${WORK_EMAIL_DOMAIN} addresses are accepted by the app.</div></div>
   </div>
   <div class="actions"><button class="btn primary" id="emailDatabase">Email Encrypted Database</button><label class="btn" for="importData">Import Encrypted Database</label><input id="importData" type="file" accept=".sccbackup,.json,application/json,application/octet-stream" style="display:none"></div>
-  <div class="notice">Export asks for your app PIN, then a separate transfer password. The transfer password should be given to the recipient separately. On iPhone, choose Mail in the system share sheet and send only to the approved work recipient.</div>
+  <div class="notice">Export asks for your app PIN, then a separate transfer password. The transfer password should be given to the recipient separately.</div>
   <div id="importMessage" class="muted" style="margin-top:6px"></div></section>
-  <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${active.length}</strong>Active Clients</div><div class="stat"><strong>${inactive.length}</strong>Inactive Clients</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>
-  <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(x=>`<div class="registry-row"><b>${esc(displayClientName(x.room.name))}</b><span>${esc(x.property.address)} • Room ${esc(x.room.room)}</span><small>${x.room.workSchedule?`Work: ${esc(x.room.workSchedule)}`:'No work schedule entered'}${x.room.schoolSchedule?` • School: ${esc(x.room.schoolSchedule)}`:''}</small></div>`).join('')||'<div class="muted">No active clients.</div>'}</div></section>
-  <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Records stay here so returning clients can be restored instead of re-created.</div><div class="registry-list">${inactive.map((c,i)=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}${c.schoolSchedule?` • School: ${esc(c.schoolSchedule)}`:''}</small>${openBeds.length?`<div class="registry-restore"><select data-restore-bed="${i}">${bedOptions}</select><button class="btn" data-restore="${i}">Reactivate</button></div>`:'<small>No OPEN bed is currently available for reactivation.</small>'}</div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
+  <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${active.length}</strong>Active Clients</div><div class="stat"><strong>${unassigned.length}</strong>Unassigned</div><div class="stat"><strong>${inactive.length}</strong>Inactive</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>
+  <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(c=>{
+    const a=clientAssignment(c.clientId);
+    return `<div class="registry-row"><b>${esc(displayClientName(c.name))}</b><span>${a?`${esc(a.property.address)} • Room ${esc(a.room.room)}`:'ACTIVE • UNASSIGNED'}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}${c.schoolSchedule?` • School: ${esc(c.schoolSchedule)}`:''}</small></div>`;
+  }).join('')||'<div class="muted">No active clients.</div>'}</div></section>
+  <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Reactivate clients from CLIENT • SECURE. Housing assignment is handled separately from PROPERTIES.</div><div class="registry-list">${inactive.map(c=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}${c.schoolSchedule?` • School: ${esc(c.schoolSchedule)}`:''}</small></div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderDatabase()};
   document.getElementById('emailDatabase').onclick=emailEncryptedDatabase;
@@ -2472,14 +2724,6 @@ function renderDatabase(){
     const f=document.getElementById('importData').files?.[0];if(!f)return;const msg=document.getElementById('importMessage');
     try{await importPrivateData(f);msg.textContent='Encrypted database imported into this phone’s protected local database.';setTimeout(renderDatabase,450)}catch(e){msg.textContent='Import failed: '+e.message}
   };
-  view.querySelectorAll('[data-restore]').forEach(b=>b.onclick=async()=>{
-    if(!await requestPin('reactivate this client'))return;
-    const i=+b.dataset.restore,c=state.inactiveClients[i],sel=view.querySelector(`[data-restore-bed="${i}"]`);if(!c||!sel)return;
-    const [pid,roomNo]=sel.value.split('::'),p=state.properties.find(x=>x.id===pid),r=p?.rooms.find(x=>String(x.room)===roomNo);
-    if(!p||!r||r.type!=='open'){alert('That bed is no longer open. Refresh and choose another.');return}
-    Object.assign(r,{type:'client',name:c.name,phone:c.phone,color:c.color,note:c.note,checkRequired:c.checkRequired,clientId:c.clientId||uuid(),workSchedule:c.workSchedule||'',schoolSchedule:c.schoolSchedule||'',importantInfo:c.importantInfo||''});
-    state.inactiveClients.splice(i,1);await saveState();renderDatabase();
-  });
 }
 
 

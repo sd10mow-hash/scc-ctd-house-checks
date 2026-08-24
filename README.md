@@ -1,18 +1,19 @@
-# SCC-CTD House Checks v1.6.10
+# SCC-CTD House Checks v1.6.11
 
 GitHub-ready public PWA build.
 
-## v1.6.10 route handoff simplification
+## v1.6.11 central client registry / housing assignment
 
-- Removes the in-app route-progress tracker entirely.
-- No Arrived / Next Stop button, no Coming Up tracker, and no per-house driver checkoff.
-- Plan Route remains the route workspace and preserves manual arrow ordering.
-- Google Maps receives the actual ordered route section, including intermediate waypoints.
-- Routes larger than Google Maps can safely accept in one handoff are split into clearly labeled Google Maps Part buttons.
-- A 13-house route is normally two Google Maps launches rather than one launch per house.
-- The final Google Maps part returns to the route's original starting location.
-- Current Position is captured only when needed so the final section can return to the same starting coordinates.
-- Database schema remains 25. No roster/client/property migration.
+- Schema 26 introduces a central encrypted client registry. Existing housed clients migrate automatically when the database unlocks.
+- **CLIENT • SECURE** now owns client creation, profile editing, activation, and deactivation.
+- New clients are created once as **ACTIVE • UNASSIGNED** before housing placement.
+- **PROPERTIES** no longer creates client identities inside room rows. Open rooms use **Assign Client** with the same 3-letter narrowing behavior.
+- Unassigning a client opens the room but keeps the client **ACTIVE • UNASSIGNED**. Housing never deactivates the person.
+- Deactivation happens only from the secure client profile and opens any currently assigned room.
+- Client profile edits sync to the assigned room used by inspections and reports.
+- Secure Client entry requires PIN re-authentication.
+- Existing inspections, reports, properties, rooms, route locations, and client history are preserved.
+
 
 ## v1.6.1 changes
 - Rebuilt Route Planner as a clean three-button hub: **Create Route**, **Business Locations**, and **Saved Locations**.

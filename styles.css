@@ -1382,8 +1382,63 @@ a{color:var(--accent)}
 .route-plan-actions .route-start-route{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center}
 .route-plan-actions .route-start-route small{display:block;font-size:11px;font-weight:750;line-height:1.2;opacity:.72}
 
-/* v1.6.10 Secure Client quick navigation */
+/* v1.6.11 Secure Client quick navigation */
 .client-location-line{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .client-address-link{color:var(--green);font-weight:850;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;cursor:pointer}
 .client-address-link:active{opacity:.72}
 .profile-grid .client-address-link{display:block;white-space:normal}
+
+
+/* v1.6.11 central client registry + housing assignment */
+.housing-room-row{
+  grid-template-columns:92px 150px minmax(260px,1fr) auto;
+  gap:10px;
+  align-items:end;
+  padding:10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;
+  background:rgba(255,255,255,.025);
+}
+.housing-room-row .field{margin:0}
+.housing-assignment-wide{min-width:0}
+.housing-assignment-card{
+  min-height:54px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:9px 11px;
+  border:1px solid rgba(119,211,61,.24);
+  border-radius:12px;
+  background:rgba(119,211,61,.06);
+}
+.housing-assignment-card.open-assignment{border-color:rgba(255,211,74,.28);background:rgba(255,211,74,.05)}
+.housing-assignment-card.no-bed-assignment{border-color:rgba(255,90,90,.22);background:rgba(255,90,90,.045)}
+.client-assignment-dialog{width:min(720px,94vw)}
+.housing-client-results{max-height:52vh;overflow:auto;margin-top:10px}
+.housing-client-choice{
+  width:100%;
+  display:grid;
+  grid-template-columns:minmax(150px,1fr) auto;
+  gap:3px 12px;
+  padding:12px;
+  margin:6px 0;
+  text-align:left;
+  color:var(--text);
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:12px;
+  background:rgba(255,255,255,.035);
+}
+.housing-client-choice b{font-size:15px}
+.housing-client-choice span,.housing-client-choice small{color:var(--muted)}
+.housing-client-choice small{grid-column:1/-1}
+.client-registry-actions{margin:10px 0}
+@media(max-width:700px){
+  .housing-room-row{grid-template-columns:1fr 1fr}
+  .housing-assignment-wide{grid-column:1/-1}
+  .housing-room-row>.btn.red{grid-column:1/-1}
+  .housing-assignment-card{align-items:flex-start;flex-direction:column}
+  .housing-assignment-card .actions{width:100%}
+  .housing-assignment-card .actions .btn,.housing-assignment-card>.btn{width:100%}
+  .housing-client-choice{grid-template-columns:1fr}
+}
