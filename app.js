@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.6';
+const VERSION='1.4.8';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounselingcenter.org';
@@ -98,7 +98,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:9,
+    schemaVersion:11,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -224,7 +224,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=9;
+  d.schemaVersion=11;
   return d;
 }
 function getCheck(pid,room){
@@ -327,7 +327,7 @@ async function setupDatabase(pin,reportNumber,reporterName,reporterRole,userWork
   state.settings.reporterRole=String(reporterRole||'').trim();
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:9});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:11});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -356,6 +356,22 @@ function requestPin(reason='modify this record'){
     wrap.querySelector('#adminPinOk').onclick=submit;input.onkeydown=e=>{if(e.key==='Enter')submit();if(e.key==='Escape')done(false)};
   });
 }
+
+async function quickLock(){
+  try{if(state&&cryptoKey)await saveState()}catch{}
+  clearTimeout(autoLockTimer);
+  codesUnlocked=false;
+  hideFullNames();
+  cryptoKey=null;
+  state=null;
+  activePropertyId=null;
+  editPropertyId=null;
+  editLocationId=null;
+  reportApproved=false;
+  historyOpenId=null;
+  await showLock();
+}
+
 function bumpLock(){
   clearTimeout(autoLockTimer);
   if(!state)return;
@@ -422,6 +438,19 @@ async function ensureUserProfile(){
       <div class="actions"><button class="btn primary" id="saveUserProfile">Save User Profile</button></div>
     </div>`;
     document.body.appendChild(wrap);
+    const dialog=wrap.querySelector('.user-profile-setup');
+    wrap.querySelectorAll('input,select,textarea').forEach(el=>{
+      el.addEventListener('focus',()=>setTimeout(()=>el.scrollIntoView({block:'center',behavior:'smooth'}),180));
+    });
+    if(window.visualViewport){
+      const fit=()=>{
+        const h=Math.max(280,window.visualViewport.height-20);
+        dialog.style.maxHeight=`${h}px`;
+      };
+      fit();
+      window.visualViewport.addEventListener('resize',fit);
+      wrap._cleanupViewport=()=>window.visualViewport.removeEventListener('resize',fit);
+    }
     const done=async()=>{
       const name=wrap.querySelector('#profileReporterName').value.trim();
       const role=wrap.querySelector('#profileReporterRole').value.trim();
@@ -435,6 +464,7 @@ async function ensureUserProfile(){
       state.settings.userWorkEmail=email;
       state.settings.profileComplete=true;
       await saveState();
+      if(wrap._cleanupViewport)wrap._cleanupViewport();
       wrap.remove();
       resolve(true);
     };
@@ -506,12 +536,16 @@ function renderShell(){
   bumpLock();
   APP.innerHTML=`<div class="shell">
     <div class="top">
-      <div class="brandrow"><img class="appmark" src="icon-192.png" alt=""><div><div class="brand">SCC-CTD • House Checks <span class="version">v${VERSION}</span></div><div class="sub">Encrypted internal database • complete reports • local history</div></div></div>
+      <div class="topline">
+        <div class="brandrow"><img class="appmark" src="icon-192.png" alt=""><div><div class="brand">SCC-CTD • House Checks <span class="version">v${VERSION}</span></div><div class="sub">Encrypted internal database • complete reports • local history</div></div></div>
+        <button class="quick-lock" id="quickLock" type="button" aria-label="Lock House Checks now">🔒 Lock</button>
+      </div>
       <div class="nav" id="nav"></div>
     </div>
     <div id="view"></div>
     <div class="footer">Client names and door codes live in the encrypted internal database on this device. The hosted app package itself contains no private roster. <span class="version">v${VERSION}</span></div>
   </div>`;
+  document.getElementById('quickLock').onclick=quickLock;
   render();
 }
 function drawNav(){
@@ -1312,7 +1346,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:9,
+    schemaVersion:11,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,

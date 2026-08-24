@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.4.6
+# SCC-CTD House Checks v1.4.8
 
 GitHub-ready public PWA build.
 
-## v1.4.6 changes
+## v1.4.8 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.4.6 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.4.8 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -72,3 +72,17 @@ V1.4.6 UNIFIED CLIENT SEARCH
 - Each result has View Client and Edit Client.
 - Edit Client requires the app PIN and includes name, phone, inspection requirement, work schedule, school schedule, important information, and permanent profile note.
 - Active client results can jump directly to Open House.
+
+
+V1.4.7 QUICK LOCK
+- Added a persistent 🔒 Lock button to the top/front of the app.
+- Quick Lock saves current state, clears the in-memory encryption key and decrypted state, hides temporary names/codes, and immediately returns to the PIN screen.
+- This is separate from the automatic inactivity lock and makes intentional logout/lock much faster on a phone.
+
+
+V1.4.8 IPHONE PROFILE-SCREEN SCROLL FIX
+- Fixed the “Who is using this phone?” screen being clipped on iPhone.
+- PIN/profile overlays now scroll vertically and respect iPhone safe areas.
+- The profile dialog resizes against the iOS visual viewport when the keyboard opens.
+- Focusing Name / Role / Work Email automatically scrolls that field into view.
+- Reporter-profile fields use a single-column mobile layout and 16px inputs to avoid Safari zoom/clipping.
