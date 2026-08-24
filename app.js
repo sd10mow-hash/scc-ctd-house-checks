@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.9';
+const VERSION='1.6.0';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -100,7 +100,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:22,
+    schemaVersion:23,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -248,7 +248,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=22;
+  d.schemaVersion=23;
   return d;
 }
 function getCheck(pid,room){
@@ -351,7 +351,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:22});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:23});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -579,10 +579,10 @@ async function showLock(){
 /* ---------- Shell / navigation ---------- */
 const MAIN_MENU_ROWS=[
   [['inspections','📋','INSPECTIONS']],
-  [['report','📄','REPORTS']],
   [['route','📍','ROUTE PLANNER']],
   [['search','🔒','CLIENT • SECURE']],
   [['properties','🏠','PROPERTIES']],
+  [['vehicleLogs','🚐','VEHICLE LOGS • UNDER CONST']],
   [['settings','⚙️','SETTINGS']]
 ]
 
@@ -678,6 +678,7 @@ function render(){
   if(screen==='history')return renderHistory();
   if(screen==='codes')return renderLockCodes();
   if(screen==='properties')return renderProperties();
+  if(screen==='vehicleLogs')return renderVehicleLogs();
   if(screen==='locations')return renderLocations();
   if(screen==='database')return renderDatabase();
   if(screen==='settings')return renderSettings();
@@ -740,6 +741,14 @@ function finalPreviewIsCurrent(){
 }
 async function beginInspectionForToday(){
   const key=inspectionTodayKey();
+  const existingReports=reportsForDateKey(key);
+  if(existingReports.length){
+    alert(`The nightly inspection for ${inspectionDateLabel(key,true)} has already been finalized. Revisit the locked report instead of starting another inspection.`);
+    inspectionDayKey=key;
+    inspectionView='day';
+    renderInspections();
+    return;
+  }
   if(inspectionRunIsActive()){
     alert(`An inspection is already in progress for ${inspectionDateLabel(activeInspectionDate()||key,true)}.`);
     inspectionDayKey=activeInspectionDate()||key;
@@ -842,13 +851,19 @@ function renderInspectionDayDetail(key){
 
   ${reports.length?`<section class="panel">
     <div class="title">Completed Report${reports.length===1?'':'s'}</div>
-    <div class="history-list">${reports.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} unresolved</div></div><button class="btn primary" data-inspection-history="${esc(h.id)}">Open Report 🔒</button></article>`).join('')}</div>
+    <div class="history-list">${reports.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} unresolved</div></div><button class="btn primary" data-inspection-history="${esc(h.id)}">Revisit Report 🔒</button></article>`).join('')}</div>
   </section>`:''}
 
-  ${isToday&&!inspectionRunIsActive()?`<section class="panel start-inspection-panel">
+  ${isToday&&!inspectionRunIsActive()&&!reports.length?`<section class="panel start-inspection-panel">
     <div class="title">Nightly Inspection</div>
     <div class="muted">This calendar date is the only place a new nightly inspection can be started.</div>
     <button class="btn primary begin-inspection-button" id="beginInspection">Start Inspections • ${esc(inspectionDateLabel(key,true))}</button>
+  </section>`:''}
+
+  ${isToday&&!inspectionRunIsActive()&&reports.length?`<section class="panel finalized-day-panel">
+    <div class="finalized-day-banner">🔒 NIGHTLY INSPECTION FINALIZED</div>
+    <div class="muted">A locked final report already exists for ${esc(inspectionDateLabel(key,true))}. Starting another inspection for this date is disabled.</div>
+    <button class="btn primary revisit-report-button" id="revisitFinalReport">Revisit Final Report</button>
   </section>`:''}
 
   ${isActiveDate?`<section class="panel inspection-active-panel">
@@ -878,6 +893,12 @@ function renderInspectionDayDetail(key){
 
   const begin=document.getElementById('beginInspection');
   if(begin)begin.onclick=beginInspectionForToday;
+
+  const revisit=document.getElementById('revisitFinalReport');
+  if(revisit)revisit.onclick=()=>{
+    const latest=reports[0];
+    if(latest)openInspectionHistoryReport(latest.id);
+  };
 
   const cont=document.getElementById('continueInspection');
   if(cont)cont.onclick=()=>{inspectionView='run';renderInspections()};
@@ -1921,7 +1942,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:22,
+    schemaVersion:23,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -2112,6 +2133,19 @@ function renderDatabase(){
     Object.assign(r,{type:'client',name:c.name,phone:c.phone,color:c.color,note:c.note,checkRequired:c.checkRequired,clientId:c.clientId||uuid(),workSchedule:c.workSchedule||'',schoolSchedule:c.schoolSchedule||'',importantInfo:c.importantInfo||''});
     state.inactiveClients.splice(i,1);await saveState();renderDatabase();
   });
+}
+
+
+/* ---------- Vehicle Logs ---------- */
+function renderVehicleLogs(){
+  const view=document.getElementById('view');
+  setModulePrevious(goHome);
+  view.innerHTML=`<section class="panel vehicle-logs-placeholder">
+    <div class="vehicle-logs-icon">🚐</div>
+    <div class="title">Vehicle Logs</div>
+    <div class="under-const-badge">UNDER CONSTRUCTION</div>
+    <div class="muted">Reserved for the vehicle-log workflow currently being designed.</div>
+  </section>`;
 }
 
 /* ---------- Settings ---------- */

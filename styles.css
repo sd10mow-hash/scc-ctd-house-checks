@@ -1246,3 +1246,53 @@ a{color:var(--accent)}
   font-size:5px;
   color:#666;
 }
+
+
+/* v1.6.0 finalized-day lock + Vehicle Logs placeholder */
+.finalized-day-panel{
+  text-align:center;
+  border-color:rgba(91,164,255,.36);
+  background:
+    radial-gradient(circle at 50% 0%,rgba(91,164,255,.12),transparent 58%),
+    rgba(91,164,255,.025);
+}
+.finalized-day-banner{
+  color:#9fc5ff;
+  font-weight:950;
+  letter-spacing:.055em;
+  margin-bottom:8px;
+}
+.revisit-report-button{
+  width:100%;
+  min-height:52px;
+  margin-top:12px;
+}
+.vehicle-logs-placeholder{
+  min-height:260px;
+  display:grid;
+  place-items:center;
+  align-content:center;
+  gap:10px;
+  text-align:center;
+}
+.vehicle-logs-icon{
+  width:66px;
+  height:66px;
+  display:grid;
+  place-items:center;
+  border-radius:18px;
+  border:1px solid rgba(71,235,211,.24);
+  background:rgba(71,235,211,.06);
+  font-size:32px;
+}
+.under-const-badge{
+  display:inline-flex;
+  padding:5px 9px;
+  border-radius:999px;
+  border:1px solid rgba(246,187,67,.30);
+  background:rgba(246,187,67,.07);
+  color:#f6bb43;
+  font-size:10px;
+  font-weight:950;
+  letter-spacing:.09em;
+}
