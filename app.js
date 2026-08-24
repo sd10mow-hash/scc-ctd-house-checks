@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.3';
+const VERSION='1.5.4';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -11,6 +11,7 @@ let cryptoKey=null,state=null,screen='home',activePropertyId=null,editPropertyId
 let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
 let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
+let inspectionView='calendar',inspectionDayKey=null,reportOrigin='menu';
 let routePickerOpen=false,routePickerDraft=null;
 let codesUnlocked=false;
 
@@ -98,7 +99,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:16,
+    schemaVersion:17,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -113,7 +114,8 @@ function defaultState(){
       reportTextNumber:'',
       autoLockMinutes:15
     },
-    currentRun:{id:uuid(),startedAt:new Date().toISOString(),checks:{}},
+    dailyNotes:{},
+    currentRun:{id:uuid(),active:false,runDate:'',startedAt:'',checks:{}},
     history:[]
   };
 }
@@ -206,7 +208,26 @@ function normalizeState(raw){
   if(!d.settings.reporterName&&s.settings?.driverName)d.settings.reporterName=s.settings.driverName;
   d.settings.authorizedUserCell=d.settings.authorizedUserCell||'';
   if(Number(s.schemaVersion||0)<12)d.settings.profileComplete=false;
-  d.currentRun=s.currentRun&&s.currentRun.checks?{...s.currentRun,id:s.currentRun.id||uuid(),startedAt:s.currentRun.startedAt||new Date().toISOString()}:{id:uuid(),startedAt:new Date().toISOString(),checks:{}};
+  d.dailyNotes=(s.dailyNotes&&typeof s.dailyNotes==='object'&&!Array.isArray(s.dailyNotes))?deepClone(s.dailyNotes):{};
+  if(s.currentRun&&s.currentRun.checks){
+    const hadChecks=Object.keys(s.currentRun.checks||{}).length>0;
+    const started=s.currentRun.startedAt||'';
+    let inferredDate=s.currentRun.runDate||'';
+    if(!inferredDate&&started){
+      const x=new Date(started);
+      if(!Number.isNaN(x.getTime()))inferredDate=localDateKeyFromDate(x);
+    }
+    d.currentRun={
+      ...s.currentRun,
+      id:s.currentRun.id||uuid(),
+      active:typeof s.currentRun.active==='boolean'?s.currentRun.active:hadChecks,
+      runDate:inferredDate,
+      startedAt:started,
+      checks:s.currentRun.checks||{}
+    };
+  }else{
+    d.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
+  }
   d.history=Array.isArray(s.history)?s.history:[];
   if(Number(s.schemaVersion||0)<5){
     for(const p of d.properties){
@@ -225,7 +246,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=16;
+  d.schemaVersion=17;
   return d;
 }
 function getCheck(pid,room){
@@ -328,7 +349,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:16});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:17});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -614,6 +635,13 @@ function drawNav(){
         if(!await requestPin('view the full lock-code list'))return;
         codesUnlocked=true;
       }
+      if(next==='report')reportOrigin='menu';
+      if(next==='inspections'){
+        inspectionView='calendar';
+        inspectionDayKey=null;
+        historySelectedDate=null;
+        historyOpenId=null;
+      }
       screen=next;
       render();
     });
@@ -621,8 +649,14 @@ function drawNav(){
   }
 
   nav.className='nav module-nav';
-  nav.innerHTML=`<button class="module-home-button" id="moduleHome">← Main Screen</button>`;
-  document.getElementById('moduleHome').onclick=goHome;
+  nav.innerHTML=`<button class="module-home-button" id="modulePrevious">← Previous</button>`;
+  document.getElementById('modulePrevious').onclick=goHome;
+}
+function setModulePrevious(handler,label='Previous'){
+  const b=document.getElementById('modulePrevious');
+  if(!b)return;
+  b.textContent=`← ${label}`;
+  b.onclick=handler;
 }
 
 function render(){
@@ -650,44 +684,81 @@ function render(){
 }
 
 
-/* ---------- Inspections calendar / completed reports ---------- */
+/* ---------- Inspections calendar / notes / completed reports ---------- */
 function localDateKeyFromDate(d){
   const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');
   return `${y}-${m}-${day}`;
 }
+function dateFromKey(key){return new Date(`${key}T12:00:00`)}
 function inspectionTodayKey(){return localDateKeyFromDate(new Date())}
 function isSameCalendarMonth(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()}
+function reportDateKey(h){return h?.inspectionDate||h?.runDate||(h?.completedAt?historyLocalDateKey(h.completedAt):'')}
+function reportsForDateKey(key){return state.history.filter(h=>reportDateKey(h)===key).slice().reverse()}
+function dayNoteText(key){
+  const n=state.dailyNotes?.[key];
+  return typeof n==='string'?n:String(n?.text||'');
+}
+function dayHasNote(key){return !!dayNoteText(key).trim()}
+async function saveInspectionDayNote(key,text){
+  state.dailyNotes=state.dailyNotes||{};
+  const clean=String(text||'').trim();
+  if(clean)state.dailyNotes[key]={text:clean,updatedAt:new Date().toISOString()};
+  else delete state.dailyNotes[key];
+  await saveState();
+}
 function shiftInspectionMonth(delta){
   historyCalendarDate=new Date(historyCalendarDate.getFullYear(),historyCalendarDate.getMonth()+delta,1);
+  inspectionView='calendar';
+  inspectionDayKey=null;
   historySelectedDate=null;
   historyOpenId=null;
   renderInspections();
 }
-function reportsForDateKey(key){
-  return state.history.filter(h=>h.completedAt&&historyLocalDateKey(h.completedAt)===key).slice().reverse();
+function inspectionDateLabel(key,short=false){
+  const d=dateFromKey(key);
+  return d.toLocaleDateString(undefined,short?{month:'short',day:'numeric',year:'numeric'}:{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+}
+function inspectionRunIsActive(){return !!state.currentRun?.active}
+function activeInspectionDate(){return state.currentRun?.runDate||''}
+async function beginInspectionForToday(){
+  const key=inspectionTodayKey();
+  if(inspectionRunIsActive()){
+    alert(`An inspection is already in progress for ${inspectionDateLabel(activeInspectionDate()||key,true)}.`);
+    inspectionDayKey=activeInspectionDate()||key;
+    inspectionView='day';
+    renderInspections();
+    return;
+  }
+  state.currentRun={id:uuid(),active:true,runDate:key,startedAt:new Date().toISOString(),checks:{}};
+  await saveState();
+  inspectionDayKey=key;
+  inspectionView='run';
+  renderInspections();
 }
 async function openInspectionHistoryReport(id){
   const h=state.history.find(x=>x.id===id);
   if(!h)return;
   if(!await requestPin('open this completed report'))return;
   historyOpenId=id;
+  inspectionDayKey=reportDateKey(h)||inspectionDayKey;
+  inspectionView='historyReport';
   renderInspections();
 }
 async function secureHistoricalAction(reason,fn){
   if(!await requestPin(reason))return;
   await fn();
 }
-function currentInspectionHtml(){
-  const T=totalsFor(),todayReports=reportsForDateKey(inspectionTodayKey());
+function inspectionHouseListHtml(){
+  const T=totalsFor();
   return `<section class="panel inspection-current">
-    <div class="titlebar"><div><div class="title">Today’s Inspections</div><div class="muted">${new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</div></div>${nameRevealButton()}</div>
+    <div class="titlebar"><div><div class="title">Inspection In Progress</div><div class="muted">${inspectionDateLabel(activeInspectionDate()||inspectionTodayKey())} • Started ${state.currentRun.startedAt?new Date(state.currentRun.startedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}</div></div>${nameRevealButton()}</div>
     <div class="kpirow">
       <div class="kpi"><strong>${T.checked}</strong>Checked</div>
       <div class="kpi"><strong>${T.missing}</strong>Unresolved</div>
       <div class="kpi"><strong>${T.notRequired}</strong>Not Required</div>
       <div class="kpi"><strong>${state.properties.length}</strong>Total Houses</div>
     </div>
-    ${todayReports.length?`<div class="today-report-available"><span>✓ ${todayReports.length} completed report${todayReports.length===1?'':'s'} saved for today.</span><button class="btn" id="openTodayReport">Open Completed Report</button></div>`:''}
+    <div class="actions inspection-progress-actions"><button class="btn" id="viewCurrentReportTop">View Current Report</button></div>
   </section>
   <section class="grid">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
@@ -705,20 +776,94 @@ function currentInspectionHtml(){
       <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="badge">${g.pct}%</span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet.</div></div>'}</section>
-  <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
+  <div class="actions"><button class="btn primary" id="finishRun">Finish Inspection → Final Report</button></div>`;
+}
+function renderInspectionDayDetail(key){
+  const view=document.getElementById('view');
+  const reports=reportsForDateKey(key);
+  const isToday=key===inspectionTodayKey();
+  const isActiveDate=inspectionRunIsActive()&&activeInspectionDate()===key;
+  const activeElsewhere=inspectionRunIsActive()&&!isActiveDate;
+  const note=dayNoteText(key);
+
+  setModulePrevious(()=>{inspectionView='calendar';inspectionDayKey=null;historyOpenId=null;renderInspections()});
+
+  view.innerHTML=`<section class="panel day-detail">
+    <div class="title">${esc(inspectionDateLabel(key))}</div>
+    <div class="day-detail-status">
+      ${isToday?'<span class="day-chip today-chip">TODAY</span>':''}
+      ${reports.length?`<span class="day-chip report-chip">${reports.length} COMPLETED REPORT${reports.length===1?'':'S'}</span>`:''}
+      ${isActiveDate?'<span class="day-chip active-chip">INSPECTION IN PROGRESS</span>':''}
+    </div>
+  </section>
+
+  <section class="panel day-note-panel">
+    <div class="titlebar"><div><div class="title small-title">Day Note</div><div class="muted">A viewable note for this calendar date. Stored inside the encrypted app database.</div></div></div>
+    <textarea id="inspectionDayNote" class="day-note-input" placeholder="Add a note for this date…">${esc(note)}</textarea>
+    <div class="actions"><button class="btn primary" id="saveDayNote">Save Note</button>${note?'<button class="btn" id="clearDayNote">Clear Note</button>':''}</div>
+    <div class="muted" id="dayNoteStatus"></div>
+  </section>
+
+  ${reports.length?`<section class="panel">
+    <div class="title">Completed Report${reports.length===1?'':'s'}</div>
+    <div class="history-list">${reports.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} unresolved</div></div><button class="btn primary" data-inspection-history="${esc(h.id)}">Open Report 🔒</button></article>`).join('')}</div>
+  </section>`:''}
+
+  ${isToday&&!inspectionRunIsActive()?`<section class="panel start-inspection-panel">
+    <div class="title">Nightly Inspection</div>
+    <div class="muted">This calendar date is the only place a new nightly inspection can be started.</div>
+    <button class="btn primary begin-inspection-button" id="beginInspection">Begin Inspection • ${esc(inspectionDateLabel(key,true))}</button>
+  </section>`:''}
+
+  ${isActiveDate?`<section class="panel inspection-active-panel">
+    <div class="inspection-in-progress-banner">● INSPECTION IN PROGRESS</div>
+    <div class="actions">
+      <button class="btn primary" id="continueInspection">Continue Inspection</button>
+      <button class="btn" id="viewCurrentReport">View Current Report</button>
+    </div>
+  </section>`:''}
+
+  ${activeElsewhere?`<section class="panel">
+    <div class="notice">An inspection is already in progress for ${esc(inspectionDateLabel(activeInspectionDate(),true))}.</div>
+    <button class="btn primary" id="goActiveInspection">Go to Active Inspection</button>
+  </section>`:''}`;
+
+  document.getElementById('saveDayNote').onclick=async()=>{
+    const text=document.getElementById('inspectionDayNote').value;
+    await saveInspectionDayNote(key,text);
+    const status=document.getElementById('dayNoteStatus');
+    if(status)status.textContent=String(text||'').trim()?'Note saved.':'Note cleared.';
+    renderInspections();
+  };
+  const clear=document.getElementById('clearDayNote');
+  if(clear)clear.onclick=async()=>{await saveInspectionDayNote(key,'');renderInspections()};
+
+  view.querySelectorAll('[data-inspection-history]').forEach(b=>b.onclick=()=>openInspectionHistoryReport(b.dataset.inspectionHistory));
+
+  const begin=document.getElementById('beginInspection');
+  if(begin)begin.onclick=beginInspectionForToday;
+
+  const cont=document.getElementById('continueInspection');
+  if(cont)cont.onclick=()=>{inspectionView='run';renderInspections()};
+
+  const current=document.getElementById('viewCurrentReport');
+  if(current)current.onclick=()=>{inspectionView='currentReport';renderInspections()};
+
+  const goActive=document.getElementById('goActiveInspection');
+  if(goActive)goActive.onclick=()=>{inspectionDayKey=activeInspectionDate();inspectionView='day';renderInspections()};
 }
 function renderInspections(){
   const view=document.getElementById('view');
   const todayKey=inspectionTodayKey();
 
-  if(historyOpenId){
+  if(inspectionView==='historyReport'&&historyOpenId){
     const h=state.history.find(x=>x.id===historyOpenId);
-    if(!h){historyOpenId=null;return renderInspections()}
+    if(!h){historyOpenId=null;inspectionView='day';return renderInspections()}
+    setModulePrevious(()=>{hideFullNames();historyOpenId=null;inspectionView='day';inspectionDayKey=reportDateKey(h)||inspectionDayKey;renderInspections()});
     view.innerHTML=`<section class="panel">
       <div class="titlebar">
         <div>
-          <button class="btn" id="backInspectionCalendar">← Inspection Calendar</button>
-          <div class="title" style="margin-top:10px">Completed Report • ${esc(new Date(h.completedAt).toLocaleString())}</div>
+          <div class="title">Completed Report • ${esc(inspectionDateLabel(reportDateKey(h)||historyLocalDateKey(h.completedAt)))}</div>
           <div class="muted">Pinch with two fingers to zoom. Drag to inspect any part of the saved report.</div>
         </div>
         ${nameRevealButton()}
@@ -733,7 +878,6 @@ function renderInspections(){
         <button class="btn" id="inspectionHistEmail">Email</button>
       </div>
     </section>`;
-    document.getElementById('backInspectionCalendar').onclick=()=>{hideFullNames();historyOpenId=null;renderInspections()};
     const nameToggle=document.getElementById('toggleNames');
     if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
     document.getElementById('inspectionHistPrint').onclick=()=>secureHistoricalAction('print this completed report',async()=>window.print());
@@ -742,93 +886,89 @@ function renderInspections(){
     return;
   }
 
+  if(inspectionView==='currentReport'){
+    if(!inspectionRunIsActive()){inspectionView='calendar';return renderInspections()}
+    const snap=currentSnapshot();
+    setModulePrevious(()=>{inspectionView='day';inspectionDayKey=activeInspectionDate();renderInspections()});
+    view.innerHTML=`<section class="panel">
+      <div class="title">Current Report • ${esc(inspectionDateLabel(activeInspectionDate()))}</div>
+      <div class="muted">Live preview of the inspection currently in progress. This is not a completed report.</div>
+    </section>
+    <section class="reportwrap inspection-report-zoom">${reportPaper(snap)}</section>`;
+    return;
+  }
+
+  if(inspectionView==='run'){
+    if(!inspectionRunIsActive()){inspectionView='calendar';return renderInspections()}
+    inspectionDayKey=activeInspectionDate();
+    setModulePrevious(()=>{inspectionView='day';renderInspections()});
+    view.innerHTML=inspectionHouseListHtml();
+    const nameToggle=document.getElementById('toggleNames');
+    if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
+    view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()});
+    document.getElementById('viewCurrentReportTop').onclick=()=>{inspectionView='currentReport';renderInspections()};
+    document.getElementById('finishRun').onclick=()=>{hideFullNames();reportOrigin='inspection';screen='report';reportApproved=false;render()};
+    return;
+  }
+
+  if(inspectionView==='day'&&inspectionDayKey){
+    renderInspectionDayDetail(inspectionDayKey);
+    return;
+  }
+
+  // Calendar is the top level of Inspections.
+  inspectionView='calendar';
+  setModulePrevious(goHome);
+
   const {y,m,firstDay,days}=calendarMonthData(historyCalendarDate);
   const monthName=historyCalendarDate.toLocaleString(undefined,{month:'long',year:'numeric'});
   const counts={};
   for(const h of state.history){
-    if(!h.completedAt)continue;
-    const key=historyLocalDateKey(h.completedAt);
-    counts[key]=(counts[key]||0)+1;
+    const key=reportDateKey(h);
+    if(key)counts[key]=(counts[key]||0)+1;
   }
-
-  // When returning to the current month, default the module to today's inspections.
-  if(!historySelectedDate && isSameCalendarMonth(historyCalendarDate,new Date()))historySelectedDate=todayKey;
 
   const cells=[];
   for(let i=0;i<firstDay;i++)cells.push('<div class="calcell empty"></div>');
   for(let day=1;day<=days;day++){
     const key=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-    const count=counts[key]||0,isToday=key===todayKey,isSelected=historySelectedDate===key;
-    const enabled=isToday||count>0;
-    cells.push(`<button class="calcell inspection-day ${isToday?'inspection-today':''} ${count?'inspection-has-report':''} ${isSelected?'selected':''}" data-date="${key}" ${enabled?'':'disabled'}>
+    const count=counts[key]||0,isToday=key===todayKey,hasNote=dayHasNote(key);
+    const isActive=inspectionRunIsActive()&&activeInspectionDate()===key;
+    cells.push(`<button class="calcell inspection-day ${isToday?'inspection-today':''} ${count?'inspection-has-report':''} ${isActive?'inspection-active-day':''}" data-date="${key}">
       <span class="daynum">${day}</span>
-      ${isToday?'<span class="calendar-marker today-marker">TODAY</span>':count?'<span class="calendar-marker report-marker">REPORT</span>':''}
+      ${isActive?'<span class="calendar-marker active-marker">ACTIVE</span>':isToday?'<span class="calendar-marker today-marker">TODAY</span>':count?'<span class="calendar-marker report-marker">REPORT</span>':''}
       ${isToday&&count?'<span class="completed-corner" title="Completed report saved"></span>':''}
+      ${hasNote?'<span class="note-corner" title="Calendar note saved"></span>':''}
     </button>`);
   }
 
-  const selectedReports=historySelectedDate?reportsForDateKey(historySelectedDate):[];
-  const selectedIsToday=historySelectedDate===todayKey;
-
   view.innerHTML=`<section class="panel inspection-calendar-intro">
     <div class="title">Inspections</div>
-    <div class="muted">Green marks today. Pink marks a date containing a completed report.</div>
+    <div class="muted">Select any date. Green marks today, pink marks completed reports, and the small amber dot marks a saved day note.</div>
   </section>
   <section class="panel calendar-panel inspection-calendar">
     <div class="calendar-head"><button class="btn" id="prevInspectionMonth">←</button><strong>${esc(monthName)}</strong><button class="btn" id="nextInspectionMonth">→</button></div>
     <div class="calweek">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<span>${d}</span>`).join('')}</div>
     <div class="calendar-grid">${cells.join('')}</div>
-    <div class="calendar-legend"><span><i class="legend-box legend-today"></i>Today</span><span><i class="legend-box legend-report"></i>Completed Report</span></div>
+    <div class="calendar-legend">
+      <span><i class="legend-box legend-today"></i>Today</span>
+      <span><i class="legend-box legend-report"></i>Completed Report</span>
+      <span><i class="legend-dot legend-note"></i>Day Note</span>
+      <span><i class="legend-box legend-active"></i>Inspection In Progress</span>
+    </div>
     <div class="actions"><button class="btn" id="inspectionCurrentMonth">Current Month</button></div>
-  </section>
-  ${selectedIsToday?currentInspectionHtml():historySelectedDate&&selectedReports.length?`
-    <section class="panel">
-      <div class="title">Completed Report${selectedReports.length===1?'':'s'} • ${esc(new Date(historySelectedDate+'T12:00:00').toLocaleDateString())}</div>
-      <div class="muted">Select a saved report to open the secure zoomable copy.</div>
-      <div class="history-list">${selectedReports.map(h=>`<article class="card history-card"><div><b>${esc(new Date(h.completedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}</b><div class="meta">${h.checked??0}/${h.required??h.total??0} checked • ${h.missing??0} unresolved</div></div><button class="btn primary" data-inspection-history="${esc(h.id)}">Open Report 🔒</button></article>`).join('')}</div>
-    </section>`:''}`;
+  </section>`;
 
   document.getElementById('prevInspectionMonth').onclick=()=>shiftInspectionMonth(-1);
   document.getElementById('nextInspectionMonth').onclick=()=>shiftInspectionMonth(1);
-  document.getElementById('inspectionCurrentMonth').onclick=()=>{historyCalendarDate=new Date();historySelectedDate=todayKey;historyOpenId=null;renderInspections()};
-
-  view.querySelectorAll('[data-date]').forEach(b=>b.onclick=async()=>{
-    const key=b.dataset.date;
-    if(key===todayKey){
-      historySelectedDate=todayKey;
-      historyOpenId=null;
-      renderInspections();
-      return;
-    }
-    const reports=reportsForDateKey(key);
-    if(reports.length===1){
-      historySelectedDate=key;
-      await openInspectionHistoryReport(reports[0].id);
-      return;
-    }
-    historySelectedDate=key;
+  document.getElementById('inspectionCurrentMonth').onclick=()=>{historyCalendarDate=new Date();inspectionView='calendar';inspectionDayKey=null;renderInspections()};
+  view.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{
+    inspectionDayKey=b.dataset.date;
+    historySelectedDate=inspectionDayKey;
     historyOpenId=null;
+    inspectionView='day';
     renderInspections();
   });
-
-  view.querySelectorAll('[data-inspection-history]').forEach(b=>b.onclick=()=>openInspectionHistoryReport(b.dataset.inspectionHistory));
-
-  if(selectedIsToday){
-    const nameToggle=document.getElementById('toggleNames');
-    if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
-    view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()});
-    const finish=document.getElementById('finishRun');
-    if(finish)finish.onclick=()=>{hideFullNames();screen='report';reportApproved=false;render()};
-    const todayReport=document.getElementById('openTodayReport');
-    if(todayReport)todayReport.onclick=async()=>{
-      const reports=reportsForDateKey(todayKey);
-      if(reports.length===1)return openInspectionHistoryReport(reports[0].id);
-      historySelectedDate=todayKey;
-      // Multiple same-day reports: use secure buttons.
-      const pick=reports[0];
-      if(pick)await openInspectionHistoryReport(pick.id);
-    };
-  }
 }
 
 /* ---------- Tonight ---------- */
@@ -908,9 +1048,10 @@ function showClientProfile(p,r){
 
 function renderHouse(){
   const p=state.properties.find(x=>x.id===activePropertyId);if(!p){activePropertyId=null;return render()}
+  if(screen==='inspections')setModulePrevious(()=>{hideFullNames();activePropertyId=null;inspectionView='run';render()});
   const g=progress(p),view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="househead">
-    <div><div class="actions"><button class="btn" id="backHouses">← Houses</button>${nameRevealButton()}</div><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${
+    <div><div class="actions"><button class="btn" id="backHouses">← Previous</button>${nameRevealButton()}</div><h2 class="title" style="margin-top:10px">${esc(p.address)}</h2><div class="houseflag">${
       !propertyNeedsChecks(p)
         ? '<span class="notrequired">NO REQUIRED CLIENTS</span>'
         : g.missing>0
@@ -921,7 +1062,7 @@ function renderHouse(){
   </div></section>
   <section class="panel">${p.rooms.map((r,i)=>roomCheckHtml(p,r,i)).join('')}</section>
   <div class="actions"><button class="btn primary" id="doneHouse">Done With House</button><button class="btn" id="editHouse">Edit Property</button></div>`;
-  document.getElementById('backHouses').onclick=()=>{hideFullNames();activePropertyId=null;render()};
+  document.getElementById('backHouses').onclick=()=>{hideFullNames();activePropertyId=null;if(screen==='inspections')inspectionView='run';render()};
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderHouse()};
   document.getElementById('toggleCode').onclick=()=>{revealCode=!revealCode;renderHouse()};
@@ -1329,6 +1470,7 @@ function renderLockCodes(){
 function currentSnapshot(completedAt=null){
   return {
     id:state.currentRun.id,
+    inspectionDate:state.currentRun.runDate||inspectionTodayKey(),
     startedAt:state.currentRun.startedAt,
     completedAt,
     reporterName:state.settings.reporterName||state.settings.driverName||'Reporter',
@@ -1401,7 +1543,14 @@ function reportPaper(snapshot,id='reportPaper'){
   </div>`;
 }
 function renderReport(){
-  const view=document.getElementById('view'),snap=currentSnapshot(),T=totalsFor();
+  const view=document.getElementById('view');
+  if(!inspectionRunIsActive()){
+    setModulePrevious(goHome);
+    view.innerHTML=`<section class="panel"><div class="title">Reports</div><div class="muted">No nightly inspection is currently in progress. Start one from Inspections by selecting today on the calendar.</div></section>`;
+    return;
+  }
+  setModulePrevious(reportOrigin==='inspection'?()=>{hideFullNames();screen='inspections';inspectionView='run';render()}:goHome);
+  const snap=currentSnapshot(),T=totalsFor();
   view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div>${nameRevealButton()}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify unresolved required clients and Not Required clients before approval.'} Client names are masked by default.</div></section>
   <section class="reportwrap">${reportPaper(snap)}</section>
   <section class="panel">${reportApproved?`<div class="delivery">
@@ -1411,7 +1560,7 @@ function renderReport(){
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderReport()};
   if(!reportApproved){
-    document.getElementById('backChecks').onclick=()=>{hideFullNames();screen='inspections';render()};
+    document.getElementById('backChecks').onclick=()=>{hideFullNames();screen='inspections';inspectionView='run';render()};
     document.getElementById('approveReport').onclick=()=>{
       const issues=requiredNoteIssues();
       if(issues.length){
@@ -1528,10 +1677,19 @@ async function completeRun(){
     renderReport();
     return;
   }
+  const finishedDate=state.currentRun.runDate||inspectionTodayKey();
   const snap=currentSnapshot(new Date().toISOString()),T=totalsFor(snap.properties,snap.checks);
-  state.history.push({...snap,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired});
-  state.currentRun={id:uuid(),startedAt:new Date().toISOString(),checks:{}};
-  reportApproved=false;hideFullNames();await saveState();alert('Completed report saved. It is now marked on the Inspections calendar. A fresh nightly run is ready.');screen='inspections';historyCalendarDate=new Date();historySelectedDate=inspectionTodayKey();historyOpenId=null;render();
+  state.history.push({...snap,inspectionDate:finishedDate,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired});
+  state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
+  reportApproved=false;hideFullNames();await saveState();
+  alert('Completed report saved. The inspection date is now marked on the calendar.');
+  screen='inspections';
+  historyCalendarDate=dateFromKey(finishedDate);
+  inspectionDayKey=finishedDate;
+  historySelectedDate=finishedDate;
+  historyOpenId=null;
+  inspectionView='day';
+  render();
 }
 
 /* ---------- History ---------- */
@@ -1600,7 +1758,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:16,
+    schemaVersion:17,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -1681,7 +1839,7 @@ async function importDatabasePayload(incoming){
   state.route=incoming.route&&Array.isArray(incoming.route.stops)?incoming.route:{stops:[]};
   const incomingSettings=incoming.settings||{};
   state.settings={...state.settings,...incomingSettings,...localIdentity,reportTextLabel:incomingSettings.reportTextLabel||incomingSettings.transportLabel||state.settings.reportTextLabel,reportTextNumber:keepText||incomingSettings.reportTextNumber||incomingSettings.transportNumber||''};
-  state.currentRun={id:uuid(),startedAt:new Date().toISOString(),checks:{}};
+  state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
   await saveState();
 }
 async function promptTransferPassword(title='Transfer Password'){

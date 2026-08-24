@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.5.3
+# SCC-CTD House Checks v1.5.4
 
 GitHub-ready public PWA build.
 
-## v1.5.3 changes
+## v1.5.4 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.5.3 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.5.4 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -146,3 +146,19 @@ V1.5.3 BRANDING + INSPECTIONS CALENDAR
 - Historical report Print, Text, and Email actions require the app PIN.
 - Completed runs return to the Inspections calendar and mark that date there instead of sending the user to a separate History screen.
 - The existing app PIN is reused for report security; this build does not create a second report password.
+
+
+V1.5.4 DATE-DRIVEN INSPECTIONS
+- Every calendar day is now selectable, including blank past and future dates.
+- Selecting a date opens a date-detail screen rather than immediately opening a report.
+- Every date can carry one encrypted Day Note. Calendar dates with a note show a small amber dot.
+- Completed reports remain pink on the calendar. Today remains green. An active inspection receives a teal active marker.
+- A new nightly inspection can ONLY be started from today's calendar detail.
+- Start button is date-explicit: “Begin Inspection • <date>”.
+- Starting an inspection creates an explicit inspectionDate/runDate so a run is not silently created on login.
+- While a run is active, today's date detail shows “INSPECTION IN PROGRESS”, Continue Inspection, and View Current Report.
+- Current Report is a live read-only preview and is not treated as a completed historical report.
+- The house worklist and individual-house screens now return through the previous inspection level.
+- Completed reports are attached to the inspection date, even if completion occurs after midnight.
+- Completed reports still require the app PIN to open, print, text, or email.
+- Top-level Reports no longer shows a ghost blank report before a nightly inspection has been started.

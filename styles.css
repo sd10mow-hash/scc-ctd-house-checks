@@ -895,3 +895,101 @@ a{color:var(--accent)}
   .inspection-calendar .calcell{min-height:50px}
   .calendar-marker{font-size:7px}
 }
+
+
+/* v1.5.4 inspection calendar date-detail workflow */
+.day-detail-status{
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+  margin-top:9px;
+}
+.day-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:24px;
+  padding:4px 8px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:950;
+  letter-spacing:.05em;
+}
+.today-chip{
+  color:#9cf16f;
+  border:1px solid rgba(119,211,61,.48);
+  background:rgba(119,211,61,.09);
+}
+.report-chip{
+  color:#ff8ab8;
+  border:1px solid rgba(255,95,158,.45);
+  background:rgba(255,95,158,.08);
+}
+.active-chip{
+  color:#78f2dc;
+  border:1px solid rgba(71,235,211,.48);
+  background:rgba(71,235,211,.09);
+}
+.day-note-panel{border-color:rgba(246,187,67,.18)}
+.day-note-input{
+  width:100%;
+  min-height:112px;
+  resize:vertical;
+  margin-top:10px;
+  border-radius:13px;
+  border:1px solid rgba(246,187,67,.26);
+  background:#080c0e;
+  color:var(--text);
+  padding:12px;
+  font:inherit;
+  font-size:16px;
+}
+.small-title{font-size:16px}
+.begin-inspection-button{
+  width:100%;
+  margin-top:12px;
+  min-height:54px;
+  font-size:15px;
+  letter-spacing:.02em;
+}
+.inspection-in-progress-banner{
+  padding:11px 12px;
+  border-radius:12px;
+  border:1px solid rgba(71,235,211,.34);
+  background:rgba(71,235,211,.08);
+  color:#78f2dc;
+  font-weight:950;
+  letter-spacing:.04em;
+  margin-bottom:10px;
+}
+.inspection-progress-actions{
+  margin-top:10px;
+}
+.note-corner{
+  position:absolute;
+  bottom:5px;
+  right:5px;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#f6bb43;
+  box-shadow:0 0 0 2px rgba(246,187,67,.13);
+}
+.inspection-active-day{
+  box-shadow:0 0 0 2px rgba(71,235,211,.44) inset;
+}
+.active-marker{color:#78f2dc}
+.legend-dot{
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  display:inline-block;
+}
+.legend-note{background:#f6bb43}
+.legend-active{
+  background:rgba(71,235,211,.13);
+  border:1px solid rgba(71,235,211,.70);
+}
+@media(max-width:560px){
+  .day-note-input{min-height:96px}
+  .begin-inspection-button{min-height:50px}
+}
