@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.11';
+const VERSION='1.6.12';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1417,22 +1417,28 @@ function roomEditorHtml(p,r,i){
 function assignClientPicker(p,r){
   const wrap=document.createElement('div');wrap.className='pin-overlay';
   let q='';
+  const searchKey=s=>String(s||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
   const draw=()=>{
-    const candidates=unassignedActiveClients().filter(c=>{
-      const s=String(q||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
-      if(s.length<3)return false;
-      return clientSearchKey(c.name).includes(s);
+    const needle=searchKey(q);
+    const candidates=needle.length<3?[]:activeRegistryClients().filter(c=>{
+      const full=searchKey(c.name);
+      return full.includes(needle)||clientSearchKey(c.name).includes(needle);
     });
     wrap.innerHTML=`<div class="pin-dialog client-assignment-dialog">
       <div class="title">Assign Client • ${esc(p.address)} • Room ${esc(r.room)}</div>
-      <div class="muted">Search the existing client registry. New clients are created in CLIENT • SECURE first.</div>
+      <div class="muted">Type any 3 letters. Unassigned clients can be placed here. Housed clients can be moved here without creating a duplicate record.</div>
       <div class="searchbar"><input id="housingClientSearch" autocomplete="off" placeholder="Type any 3 letters" value="${esc(q)}"><button class="btn" id="housingAssignCancel">Cancel</button></div>
       <div class="registry-list housing-client-results">${
-        String(q).replace(/[^a-z0-9]/gi,'').length<3
+        needle.length<3
           ? '<div class="muted">Enter at least 3 letters.</div>'
           : candidates.length
-            ? candidates.map((c,i)=>`<button class="housing-client-choice" data-pickclient="${i}"><b>${esc(c.name)}</b><span>${esc(c.phone?fmtPhone(c.phone):'No phone entered')}</span><small>${c.checkRequired!==false?'Inspection REQUIRED':'Inspection NOT REQUIRED'}</small></button>`).join('')
-            : '<div class="muted">No ACTIVE • UNASSIGNED client matches that search.</div>'
+            ? candidates.map((c,i)=>{
+                const a=clientAssignment(c.clientId);
+                const housing=a?`CURRENTLY • ${a.property.address} • Room ${a.room.room}`:'ACTIVE • UNASSIGNED';
+                const action=a?'MOVE HERE':'ASSIGN HERE';
+                return `<button class="housing-client-choice" data-pickclient="${i}"><b>${esc(c.name)}</b><span>${esc(housing)}</span><small>${c.checkRequired!==false?'Inspection REQUIRED':'Inspection NOT REQUIRED'} • ${action}</small></button>`;
+              }).join('')
+            : '<div class="muted">No active client matches those letters.</div>'
       }</div>
     </div>`;
     const input=wrap.querySelector('#housingClientSearch');
@@ -1441,7 +1447,13 @@ function assignClientPicker(p,r){
     wrap.querySelector('#housingAssignCancel').onclick=()=>wrap.remove();
     wrap.querySelectorAll('[data-pickclient]').forEach(b=>b.onclick=async()=>{
       const c=candidates[+b.dataset.pickclient];if(!c)return;
-      if(clientAssignment(c.clientId)){alert('That client was assigned elsewhere. Search again.');draw();return}
+      const current=clientAssignment(c.clientId);
+      if(current){
+        const same=current.property.id===p.id&&String(current.room.room)===String(r.room);
+        if(same){alert('That client is already assigned to this room.');return}
+        if(!confirm(`Move ${c.name} from ${current.property.address} • Room ${current.room.room} to ${p.address} • Room ${r.room}?`))return;
+        unassignRoomClient(current.property,current.room);
+      }
       syncRoomFromClient(r,c);
       c.status='active';c.inactiveAt='';c.updatedAt=new Date().toISOString();
       state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));

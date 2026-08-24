@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.6.11
+# SCC-CTD House Checks v1.6.12
 
 GitHub-ready public PWA build.
 
-## v1.6.11 central client registry / housing assignment
+## v1.6.12 central client registry / housing assignment
 
 - Schema 26 introduces a central encrypted client registry. Existing housed clients migrate automatically when the database unlocks.
 - **CLIENT • SECURE** now owns client creation, profile editing, activation, and deactivation.
