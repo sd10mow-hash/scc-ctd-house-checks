@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.6';
+const VERSION='1.5.7';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -100,7 +100,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:19,
+    schemaVersion:20,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -224,7 +224,8 @@ function normalizeState(raw){
       active:typeof s.currentRun.active==='boolean'?s.currentRun.active:hadChecks,
       runDate:inferredDate,
       startedAt:started,
-      checks:s.currentRun.checks||{}
+      checks:s.currentRun.checks||{},
+      previewSignature:String(s.currentRun.previewSignature||'')
     };
   }else{
     d.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{}};
@@ -247,7 +248,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=19;
+  d.schemaVersion=20;
   return d;
 }
 function getCheck(pid,room){
@@ -350,7 +351,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:19});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:20});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -722,6 +723,21 @@ function inspectionDateLabel(key,short=false){
 }
 function inspectionRunIsActive(){return !!state.currentRun?.active}
 function activeInspectionDate(){return state.currentRun?.runDate||''}
+function inspectionRunSignature(){
+  return JSON.stringify(state.currentRun?.checks||{});
+}
+function inspectionFinalGate(){
+  const totals=totalsFor();
+  const noteIssues=requiredNoteIssues();
+  return {
+    totals,
+    noteIssues,
+    ready:totals.missing===0&&noteIssues.length===0
+  };
+}
+function finalPreviewIsCurrent(){
+  return !!state.currentRun?.previewSignature&&state.currentRun.previewSignature===inspectionRunSignature();
+}
 async function beginInspectionForToday(){
   const key=inspectionTodayKey();
   if(inspectionRunIsActive()){
@@ -731,7 +747,7 @@ async function beginInspectionForToday(){
     renderInspections();
     return;
   }
-  state.currentRun={id:uuid(),active:true,runDate:key,startedAt:new Date().toISOString(),checks:{}};
+  state.currentRun={id:uuid(),active:true,runDate:key,startedAt:new Date().toISOString(),checks:{},previewSignature:''};
   await saveState();
   inspectionDayKey=key;
   inspectionView='run';
@@ -751,7 +767,27 @@ async function secureHistoricalAction(reason,fn){
   await fn();
 }
 function inspectionHouseListHtml(){
-  const T=totalsFor();
+  const T=totalsFor(),gate=inspectionFinalGate(),previewCurrent=finalPreviewIsCurrent();
+  const finalControls=!gate.ready
+    ? `<section class="panel final-gate blocked">
+        <div class="final-gate-title">FINAL REPORT LOCKED</div>
+        <div class="muted">${T.missing} required field${T.missing===1?'':'s'} remain unresolved. Every required client must be accounted for before a final report can be processed.</div>
+      </section>`
+    : !previewCurrent
+      ? `<section class="panel final-gate ready">
+          <div class="final-gate-title">ALL REQUIRED CHECKS COMPLETE</div>
+          <div class="muted">Zero required fields are missing. Preview the final report before it can be locked.</div>
+          <button class="btn primary final-action-button" id="previewFinalReport">Preview Final Report</button>
+        </section>`
+      : `<section class="panel final-gate previewed">
+          <div class="final-gate-title">PREVIEW COMPLETE</div>
+          <div class="muted">The report still matches the inspection data you previewed. Any inspection change will require another preview before locking.</div>
+          <div class="actions">
+            <button class="btn" id="previewFinalAgain">Preview Again</button>
+            <button class="btn primary" id="lockFinalReport">🔒 Lock Final Report</button>
+          </div>
+        </section>`;
+
   return `<section class="panel inspection-current">
     <div class="titlebar"><div><div class="title">Inspection In Progress</div><div class="muted">${inspectionDateLabel(activeInspectionDate()||inspectionTodayKey())} • Started ${state.currentRun.startedAt?new Date(state.currentRun.startedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):''}</div></div>${nameRevealButton()}</div>
     <div class="kpirow">
@@ -778,7 +814,7 @@ function inspectionHouseListHtml(){
       <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</div>
     </article>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet.</div></div>'}</section>
-  <div class="actions"><button class="btn primary" id="finishRun">Finish Inspection → Final Report</button></div>`;
+  ${finalControls}`;
 }
 function renderInspectionDayDetail(key){
   const view=document.getElementById('view');
@@ -854,6 +890,45 @@ function renderInspectionDayDetail(key){
   const goActive=document.getElementById('goActiveInspection');
   if(goActive)goActive.onclick=()=>{inspectionDayKey=activeInspectionDate();inspectionView='day';renderInspections()};
 }
+async function exitFinalPreview(){
+  state.currentRun.previewSignature=inspectionRunSignature();
+  await saveState();
+  inspectionView='run';
+  renderInspections();
+}
+async function lockFinalInspectionReport(){
+  const gate=inspectionFinalGate();
+  if(!gate.ready){
+    const issue=gate.noteIssues[0];
+    alert(issue
+      ? `Final report cannot be locked. ${displayClientName(issue.name)} at ${issue.address} still requires a note.`
+      : `Final report cannot be locked. ${gate.totals.missing} required client field${gate.totals.missing===1?' is':'s are'} still unresolved.`);
+    return;
+  }
+  if(!finalPreviewIsCurrent()){
+    alert('The final report must be previewed after the most recent inspection change before it can be locked.');
+    return;
+  }
+  if(!await requestPin('lock the final inspection report'))return;
+
+  const finishedDate=state.currentRun.runDate||inspectionTodayKey();
+  const snap=currentSnapshot(new Date().toISOString()),T=totalsFor(snap.properties,snap.checks);
+  const locked={...snap,inspectionDate:finishedDate,lockedAt:new Date().toISOString(),locked:true,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired};
+  state.history.push(locked);
+  state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{},previewSignature:''};
+  reportApproved=false;
+  hideFullNames();
+  await saveState();
+
+  screen='inspections';
+  historyCalendarDate=dateFromKey(finishedDate);
+  inspectionDayKey=finishedDate;
+  historySelectedDate=finishedDate;
+  historyOpenId=locked.id;
+  inspectionView='historyReport';
+  render();
+}
+
 function renderInspections(){
   const view=document.getElementById('view');
   const todayKey=inspectionTodayKey();
@@ -865,7 +940,7 @@ function renderInspections(){
     view.innerHTML=`<section class="panel">
       <div class="titlebar">
         <div>
-          <div class="title">Completed Report • ${esc(inspectionDateLabel(reportDateKey(h)||historyLocalDateKey(h.completedAt)))}</div>
+          <div class="title">Locked Final Report • ${esc(inspectionDateLabel(reportDateKey(h)||historyLocalDateKey(h.completedAt)))}</div>
           <div class="muted">Pinch with two fingers to zoom. Drag to inspect any part of the saved report.</div>
         </div>
         ${nameRevealButton()}
@@ -885,6 +960,25 @@ function renderInspections(){
     document.getElementById('inspectionHistPrint').onclick=()=>secureHistoricalAction('print this completed report',async()=>window.print());
     document.getElementById('inspectionHistText').onclick=()=>secureHistoricalAction('text this completed report',async()=>textSnapshot(h));
     document.getElementById('inspectionHistEmail').onclick=()=>secureHistoricalAction('email this completed report',async()=>emailSnapshot(h));
+    return;
+  }
+
+  if(inspectionView==='finalPreview'){
+    if(!inspectionRunIsActive()){inspectionView='calendar';return renderInspections()}
+    const gate=inspectionFinalGate();
+    if(!gate.ready){inspectionView='run';return renderInspections()}
+    hideFullNames();
+    const snap=currentSnapshot();
+    setModulePrevious(exitFinalPreview,'Exit Preview');
+    view.innerHTML=`<section class="panel final-preview-header">
+      <div class="title">Final Report Preview</div>
+      <div class="muted">VIEW ONLY • Pinch with two fingers to zoom. Exit Preview to return to the inspection before locking.</div>
+    </section>
+    <section class="reportwrap inspection-report-zoom final-preview-view">${reportPaper(snap)}</section>
+    <section class="panel final-preview-footer">
+      <button class="btn primary" id="exitFinalPreview">Exit Preview</button>
+    </section>`;
+    document.getElementById('exitFinalPreview').onclick=exitFinalPreview;
     return;
   }
 
@@ -909,7 +1003,12 @@ function renderInspections(){
     if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
     view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()});
     document.getElementById('viewCurrentReportTop').onclick=()=>{inspectionView='currentReport';renderInspections()};
-    document.getElementById('finishRun').onclick=()=>{hideFullNames();reportOrigin='inspection';screen='report';reportApproved=false;render()};
+    const previewFinal=document.getElementById('previewFinalReport');
+    if(previewFinal)previewFinal.onclick=()=>{hideFullNames();inspectionView='finalPreview';renderInspections()};
+    const previewAgain=document.getElementById('previewFinalAgain');
+    if(previewAgain)previewAgain.onclick=()=>{hideFullNames();inspectionView='finalPreview';renderInspections()};
+    const lockFinal=document.getElementById('lockFinalReport');
+    if(lockFinal)lockFinal.onclick=lockFinalInspectionReport;
     return;
   }
 
@@ -946,7 +1045,7 @@ function renderInspections(){
 
   view.innerHTML=`<section class="panel inspection-calendar-intro">
     <div class="title">Inspections</div>
-    <div class="muted">Select any date. Green marks today, pink marks completed reports, and the small amber dot marks a saved day note.</div>
+    <div class="muted">Select any date. Green marks today, finalized reports carry a pink report mark with a blue halo, and the small amber dot marks a saved day note.</div>
   </section>
   <section class="panel calendar-panel inspection-calendar">
     <div class="calendar-head"><button class="btn" id="prevInspectionMonth">←</button><strong>${esc(monthName)}</strong><button class="btn" id="nextInspectionMonth">→</button></div>
@@ -954,7 +1053,7 @@ function renderInspections(){
     <div class="calendar-grid">${cells.join('')}</div>
     <div class="calendar-legend">
       <span><i class="legend-box legend-today"></i>Today</span>
-      <span><i class="legend-box legend-report"></i>Completed Report</span>
+      <span><i class="legend-box legend-report"></i>Locked Final Report</span>
       <span><i class="legend-dot legend-note"></i>Day Note</span>
       <span><i class="legend-box legend-active"></i>Inspection In Progress</span>
     </div>
@@ -1548,39 +1647,23 @@ function reportPaper(snapshot,id='reportPaper'){
 }
 function renderReport(){
   const view=document.getElementById('view');
+  setModulePrevious(goHome);
   if(!inspectionRunIsActive()){
-    setModulePrevious(goHome);
-    view.innerHTML=`<section class="panel"><div class="title">Reports</div><div class="muted">No nightly inspection is currently in progress. Start one from Inspections by selecting today on the calendar.</div></section>`;
+    view.innerHTML=`<section class="panel"><div class="title">Reports</div><div class="muted">No nightly inspection is currently in progress. Completed final reports are opened from the Inspections calendar.</div></section>`;
     return;
   }
-  setModulePrevious(reportOrigin==='inspection'?()=>{hideFullNames();screen='inspections';inspectionView='run';render()}:goHome);
-  const snap=currentSnapshot(),T=totalsFor();
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">${reportApproved?'Final Report':'Preview Complete Final Report'}</div>${nameRevealButton()}</div><div class="muted">${reportApproved?'Approved and ready to print, save, email, text, or archive.':'Every configured property is included. Verify unresolved required clients and Not Required clients before approval.'} Client names are masked by default.</div></section>
-  <section class="reportwrap">${reportPaper(snap)}</section>
-  <section class="panel">${reportApproved?`<div class="delivery">
-    <button class="btn" id="previewAgain">Preview Again</button><button class="btn" id="printReport">Print</button><button class="btn" id="saveReport">Save Snapshot</button><button class="btn" id="emailReport">Email Report</button><button class="btn green" id="textReport">Text Report</button><button class="btn primary" id="completeRun">Complete & Save to History</button>
-  </div>`:`<div class="actions"><button class="btn" id="backChecks">← Back to Checks</button><button class="btn primary" id="approveReport">Approve Complete Report</button></div>`}
-  <div class="notice">${reportApproved?`Report text recipient: ${esc(fmtPhone(state.settings.reportTextNumber))}. No message is sent until you finish it in Messages.`:`${T.checked} required checks recorded • ${T.missing} unresolved • ${T.notRequired} clients not required • ${state.properties.length} total houses in report.`}</div></section>`;
-  const nameToggle=document.getElementById('toggleNames');
-  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderReport()};
-  if(!reportApproved){
-    document.getElementById('backChecks').onclick=()=>{hideFullNames();screen='inspections';inspectionView='run';render()};
-    document.getElementById('approveReport').onclick=()=>{
-      const issues=requiredNoteIssues();
-      if(issues.length){
-        alert(`${issues.length} NOT HOME result${issues.length===1?'':'s'} still require${issues.length===1?'s':''} a note. First: ${displayClientName(issues[0].name)} at ${issues[0].address}.`);
-        return;
-      }
-      reportApproved=true;renderReport();
-    };
-  }else{
-    document.getElementById('previewAgain').onclick=()=>{reportApproved=false;renderReport()};
-    document.getElementById('printReport').onclick=()=>window.print();
-    document.getElementById('saveReport').onclick=()=>downloadSnapshot(snap);
-    document.getElementById('emailReport').onclick=()=>emailSnapshot(snap);
-    document.getElementById('textReport').onclick=()=>textSnapshot(snap);
-    document.getElementById('completeRun').onclick=completeRun;
-  }
+  const T=totalsFor();
+  view.innerHTML=`<section class="panel">
+    <div class="title">Current Inspection Report</div>
+    <div class="muted">${T.checked} required checks recorded • ${T.missing} unresolved. Final reports can only be previewed and locked from the active Inspection screen.</div>
+    <div class="actions"><button class="btn primary" id="goInspectionReport">Go to Inspection</button></div>
+  </section>`;
+  document.getElementById('goInspectionReport').onclick=()=>{
+    screen='inspections';
+    inspectionView='run';
+    inspectionDayKey=activeInspectionDate();
+    render();
+  };
 }
 async function makeReportPng(snapshot){
   const W=2200,margin=32,gap=24,half=(W-margin*2-gap)/2;
@@ -1674,6 +1757,7 @@ async function emailSnapshot(snapshot){
   await downloadSnapshot(snapshot);location.href=`mailto:?subject=${encodeURIComponent('House Check Report')}&body=${encodeURIComponent(msg+' Report image saved for attachment.')}`;
 }
 async function completeRun(){
+  return lockFinalInspectionReport();
   const issues=requiredNoteIssues();
   if(issues.length){
     alert(`Cannot complete this run yet. ${issues.length} NOT HOME result${issues.length===1?'':'s'} still need${issues.length===1?'s':''} a note.`);
@@ -1762,7 +1846,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:19,
+    schemaVersion:20,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,

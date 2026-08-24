@@ -1115,3 +1115,70 @@ a{color:var(--accent)}
 .settings-import-message.working{background:rgba(71,235,211,.06);color:#78f2dc}
 .settings-import-message.success{background:rgba(125,221,71,.08);color:#aaf17f}
 .settings-import-message.error{background:rgba(255,95,110,.08);color:#ff8793}
+
+
+/* v1.5.7 strict final-report gate */
+.final-gate{
+  margin-top:14px;
+  text-align:center;
+}
+.final-gate-title{
+  font-weight:950;
+  letter-spacing:.06em;
+  margin-bottom:7px;
+}
+.final-gate.blocked{
+  border-color:rgba(255,95,110,.30);
+  background:linear-gradient(180deg,rgba(255,95,110,.07),rgba(255,95,110,.02));
+}
+.final-gate.blocked .final-gate-title{color:#ff8793}
+.final-gate.ready{
+  border-color:rgba(125,221,71,.32);
+  background:linear-gradient(180deg,rgba(125,221,71,.07),rgba(125,221,71,.02));
+}
+.final-gate.ready .final-gate-title{color:#aaf17f}
+.final-gate.previewed{
+  border-color:rgba(71,235,211,.38);
+  background:linear-gradient(180deg,rgba(71,235,211,.08),rgba(71,235,211,.02));
+}
+.final-gate.previewed .final-gate-title{color:#78f2dc}
+.final-action-button{
+  width:100%;
+  min-height:52px;
+  margin-top:12px;
+}
+.final-preview-header,
+.final-preview-footer{
+  text-align:center;
+}
+.final-preview-header .muted{
+  margin-top:6px;
+  letter-spacing:.03em;
+}
+.final-preview-view{
+  border:1px solid rgba(71,235,211,.22);
+  border-radius:14px;
+  background:#050708;
+}
+.final-preview-footer .btn{
+  min-width:180px;
+}
+
+/* Pink report identity with blue finalized haze around the full calendar day */
+.inspection-calendar .inspection-has-report{
+  box-shadow:
+    0 0 0 2px rgba(91,164,255,.48),
+    0 0 17px rgba(91,164,255,.28),
+    inset 0 0 13px rgba(255,83,146,.10);
+}
+.inspection-calendar .inspection-today.inspection-has-report{
+  box-shadow:
+    0 0 0 2px rgba(91,164,255,.58),
+    0 0 19px rgba(91,164,255,.32),
+    inset 0 0 0 1px rgba(119,211,61,.25);
+}
+.legend-report{
+  background:rgba(255,83,146,.26);
+  border:1px solid rgba(255,92,151,.76);
+  box-shadow:0 0 7px rgba(91,164,255,.72);
+}

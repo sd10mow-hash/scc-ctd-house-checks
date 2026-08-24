@@ -39,6 +39,6 @@ PRIVACY + HISTORY v1.3.0:
 - History now has an unlimited month-by-month calendar. Dates containing reports are highlighted and clickable.
 
 
-v1.5.6: client Required/Not Required, PIN-gated property edits/deletes, ordered houses, route picker/base locations, full dynamic report image with Remarks lines.
+v1.5.7: client Required/Not Required, PIN-gated property edits/deletes, ordered houses, route picker/base locations, full dynamic report image with Remarks lines.
 
-PHONE UPDATE: after uploading v1.5.6, open https://sd10mow-hash.github.io/scc-ctd-house-checks/?build=1.4.3 directly in Safari. This build uses versioned assets and includes a safe Refresh App Files button.
+PHONE UPDATE: after uploading v1.5.7, open https://sd10mow-hash.github.io/scc-ctd-house-checks/?build=1.4.3 directly in Safari. This build uses versioned assets and includes a safe Refresh App Files button.
