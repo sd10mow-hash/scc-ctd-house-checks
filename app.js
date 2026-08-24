@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.4.2';
+const VERSION='1.4.3';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const STORE='kv', META='meta', DATA='data';
@@ -49,6 +49,25 @@ function nameRevealButton(label='Show All Names'){
   return `<button class="btn privacy-btn" id="toggleNames">${showFullNames?'Hide Full Names':label}</button>`;
 }
 
+const PROPERTY_SITUATIONS={
+  normal:{label:'Normal / Active',color:''},
+  open:{label:'Open',color:'yellow'},
+  notMoved:{label:'Not moved yet',color:'gray'},
+  outOfService:{label:'Out of Services',color:'darkgray'},
+  cannotBill:{label:'Can not Bill for',color:'rose'}
+};
+function legacyPropertySituation(p){
+  if(PROPERTY_SITUATIONS[p?.propertyStatus])return p.propertyStatus;
+  if(p?.houseColor==='yellow')return 'open';
+  if(p?.houseColor==='gray')return 'notMoved';
+  if(p?.houseColor==='red'||p?.houseColor==='rose')return 'cannotBill';
+  if(p?.houseColor==='darkgray')return 'outOfService';
+  return 'normal';
+}
+function propertySituation(p){return PROPERTY_SITUATIONS[p?.propertyStatus]||PROPERTY_SITUATIONS.normal}
+function propertySituationLabel(p){return propertySituation(p).label}
+function propertySituationColor(p){return propertySituation(p).color}
+
 const clients=p=>p.rooms.filter(r=>r.type==='client');
 const clientNeedsCheck=(p,r)=>p.checkRequired!==false && r.type==='client' && r.checkRequired!==false;
 const propertyNeedsChecks=p=>p.checkRequired!==false && clients(p).some(r=>r.checkRequired!==false);
@@ -78,7 +97,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:5,
+    schemaVersion:6,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -104,7 +123,9 @@ function normalizeRoom(r,i){
     note:r?.note??r?.permanentNote??'',
     checkRequired:(typeof r?.checkRequired==='boolean'?r.checkRequired:!['green','gray'].includes(r?.color)),
     clientId:r?.clientId??(r?.type==='client'?uuid():''),
-    workSchedule:r?.workSchedule??''
+    workSchedule:r?.workSchedule??'',
+    schoolSchedule:r?.schoolSchedule??'',
+    importantInfo:r?.importantInfo??''
   };
 }
 function normalizeProperty(p,i){
@@ -113,9 +134,11 @@ function normalizeProperty(p,i){
     id:String(p?.id??('p'+i+'_'+Date.now())),
     address:p?.address??'Unnamed Property',
     doorCode:p?.doorCode??'',
+    doorCodeUpdatedAt:p?.doorCodeUpdatedAt??'',
     beds:Number(p?.beds)||rooms.length||1,
     checkRequired:p?.checkRequired!==false,
-    houseColor:['green','gray','yellow','red'].includes(p?.houseColor)?p.houseColor:'',
+    propertyStatus:legacyPropertySituation(p),
+    houseColor:propertySituation({propertyStatus:legacyPropertySituation(p)}).color,
     rooms:rooms.length?rooms:[{room:'1',type:'open',name:'OPEN',phone:'',color:'',note:'',checkRequired:true}]
   };
 }
@@ -129,6 +152,8 @@ function normalizeInactiveClient(c,i){
     note:c?.note||'',
     checkRequired:(typeof c?.checkRequired==='boolean'?c.checkRequired:!['green','gray'].includes(c?.color)),
     workSchedule:c?.workSchedule||'',
+    schoolSchedule:c?.schoolSchedule||'',
+    importantInfo:c?.importantInfo||'',
     previousAddress:c?.previousAddress||'',
     previousRoom:String(c?.previousRoom||''),
     inactiveAt:c?.inactiveAt||new Date().toISOString()
@@ -139,6 +164,7 @@ function clientRecordFromRoom(r,address='',room=''){
     clientId:r.clientId||uuid(),
     name:r.name,phone:r.phone,color:r.color,note:r.note,
     checkRequired:r.checkRequired,workSchedule:r.workSchedule,
+    schoolSchedule:r.schoolSchedule,importantInfo:r.importantInfo,
     previousAddress:address,previousRoom:room||r.room,
     inactiveAt:new Date().toISOString()
   },0);
@@ -185,7 +211,14 @@ function normalizeState(raw){
     }
     for(const c of d.inactiveClients)c.checkRequired=!['green','gray'].includes(c.color);
   }
-  d.schemaVersion=5;
+  if(Number(s.schemaVersion||0)<6){
+    for(const p of d.properties){
+      p.propertyStatus=legacyPropertySituation(p);
+      p.houseColor=propertySituation(p).color;
+      if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
+    }
+  }
+  d.schemaVersion=6;
   return d;
 }
 function getCheck(pid,room){
@@ -284,7 +317,7 @@ async function setupDatabase(pin,reportNumber){
   cryptoKey=await deriveKey(pin,salt);
   state=defaultState();
   state.settings.reportTextNumber=digits(reportNumber);
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:5});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:6});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -338,8 +371,27 @@ async function start(){
   try{
     await compatibilityCheck();
     showLock();
-    if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    if('serviceWorker'in navigator)navigator.serviceWorker.register(`./sw.js?v=${VERSION}`,{updateViaCache:'none'}).catch(()=>{});
   }catch(e){fatalStartup('Phone startup check failed',e.message)}
+}
+
+
+async function refreshAppFiles(){
+  if(!confirm(`Refresh the SCC-CTD app files to v${VERSION}? Your encrypted client database will NOT be deleted.`))return;
+  try{
+    if('serviceWorker' in navigator){
+      const regs=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=>r.unregister()));
+    }
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.filter(k=>k.startsWith('scc-housechecks-')).map(k=>caches.delete(k)));
+    }
+  }catch{}
+  const u=new URL(location.href);
+  u.searchParams.set('build',VERSION);
+  u.searchParams.set('refresh',Date.now());
+  location.replace(u.toString());
 }
 
 /* ---------- Lock / Setup ---------- */
@@ -362,7 +414,9 @@ async function showLock(){
       <div class="error" id="lockError"></div>
       <button class="btn primary" type="submit">${exists?'Unlock':'Create Secure Database'}</button>
     </form>
+    <div class="update-box"><button class="btn" id="refreshAppFiles" type="button">Refresh App Files</button><span class="muted">Safe update helper. Clears only the app cache, not the encrypted database.</span></div>
   </section>`;
+  document.getElementById('refreshAppFiles').onclick=refreshAppFiles;
   if(!exists){
     document.getElementById('setupTestText').onclick=()=>{
       const n=digits(document.getElementById('setupTextNumber').value);
@@ -404,7 +458,7 @@ function renderShell(){
 }
 function drawNav(){
   const nav=document.getElementById('nav');
-  const items=[['tonight','Tonight'],['search','Client Search'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
+  const items=[['tonight','Tonight'],['search','Client Search'],['clients','Client Profiles'],['route','Route'],['report','Report'],['history','History'],['codes','Lock Codes'],['properties','Properties'],['locations','Locations'],['database','Database'],['settings','Settings']];
   nav.innerHTML=items.map(([k,l])=>`<button data-nav="${k}" class="${screen===k?'active':''}">${l}</button>`).join('');
   nav.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{
     hideFullNames();
@@ -420,6 +474,7 @@ function render(){
   drawNav();
   if(activePropertyId)return renderHouse();
   if(screen==='search')return renderClientSearch();
+  if(screen==='clients')return renderClientProfiles();
   if(screen==='route')return renderRoute();
   if(screen==='report')return renderReport();
   if(screen==='history')return renderHistory();
@@ -432,7 +487,7 @@ function render(){
 }
 
 /* ---------- Tonight ---------- */
-function houseClass(p){return `house-${p.houseColor||'none'} ${propertyNeedsChecks(p)?'':'not-required'}`}
+function houseClass(p){return `house-${propertySituationColor(p)||'none'} ${propertyNeedsChecks(p)?'':'not-required'}`}
 function renderTonight(){
   const view=document.getElementById('view'),T=totalsFor();
   view.innerHTML=`<section class="panel">
@@ -448,7 +503,7 @@ function renderTonight(){
   <section class="grid">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
     return `<article class="card ${houseClass(p)}">
-      <h3>${p.houseColor?`<span class="house-color ${p.houseColor}"></span> `:''}${esc(p.address)}</h3>
+      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3><div class="property-situation">${esc(propertySituationLabel(p))}</div>
       <div class="houseflag">${
         !propertyNeedsChecks(p)
           ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
@@ -495,6 +550,8 @@ function showClientProfile(p,r){
       <div><b>Phone</b><span>${r.phone?esc(fmtPhone(r.phone)):'Not entered'}</span></div>
       <div><b>House Inspection</b><span class="${r.checkRequired!==false?'profile-required':'profile-notrequired'}">${r.checkRequired!==false?'REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</span></div>
       <div class="profile-wide"><b>Work Schedule</b><span>${esc(r.workSchedule||'No work schedule entered.')}</span></div>
+      <div class="profile-wide"><b>School Schedule</b><span>${esc(r.schoolSchedule||'No school schedule entered.')}</span></div>
+      <div class="profile-wide"><b>Important Information</b><span>${esc(r.importantInfo||'No additional important information entered.')}</span></div>
       <div class="profile-wide"><b>Profile Note</b><span>${esc(r.note||'No profile note entered.')}</span></div>
     </div>
     <div class="actions"><button class="btn primary" id="closeClientProfile">Close</button></div>
@@ -612,9 +669,9 @@ function renderPropertyEditor(p){
   e.innerHTML=`<section class="panel"><div class="title">Editing ${esc(p.address)}</div>
     <div class="formgrid">
       <div class="field"><label>Address</label><input id="propAddress" value="${esc(p.address)}"></div>
-      <div class="field"><label>Door code</label><input id="propCode" value="${esc(p.doorCode)}"></div>
+      <div class="field"><label>Door code</label><input id="propCode" value="${esc(p.doorCode)}"><div class="field-help">${p.doorCodeUpdatedAt?`Last changed ${esc(new Date(p.doorCodeUpdatedAt).toLocaleString())}`:'No change date recorded yet.'}</div></div>
       <div class="field"><label>Number of beds</label><input id="propBeds" type="number" min="1" max="60" value="${p.beds}"></div>
-      <div class="field"><label>House color</label><select id="propColor"><option value="" ${!p.houseColor?'selected':''}>No house color</option><option value="green" ${p.houseColor==='green'?'selected':''}>Green</option><option value="gray" ${p.houseColor==='gray'?'selected':''}>Gray</option><option value="yellow" ${p.houseColor==='yellow'?'selected':''}>Yellow</option><option value="red" ${p.houseColor==='red'?'selected':''}>Red</option></select></div>
+      <div class="field"><label>Property situation</label><select id="propSituation">${Object.entries(PROPERTY_SITUATIONS).map(([k,v])=>`<option value="${k}" ${p.propertyStatus===k?'selected':''}>${esc(v.label)}</option>`).join('')}</select><div class="field-help">Color is assigned automatically from the situation. It is not a free-choice decoration.</div></div>
       <label class="checkboxline"><input id="propRequired" type="checkbox" ${p.checkRequired!==false?'checked':''}> House participates in checks</label>
     </div>
     <div class="notice"><b>Client House-Inspection Requirement:</b> use the REQUIRED / NOT REQUIRED selector on each client record. NOT REQUIRED clients remain visible during the house visit but are read-only and marked DO NOT DISTURB. Original highlighted clients migrate to NOT REQUIRED automatically.</div>
@@ -641,7 +698,12 @@ function renderPropertyEditor(p){
   document.getElementById('cancelProperty').onclick=()=>{editPropertyId=null;renderProperties()};
   document.getElementById('saveProperty').onclick=async()=>{
     p.address=document.getElementById('propAddress').value.trim()||'Unnamed Property';
-    p.doorCode=document.getElementById('propCode').value.trim();p.houseColor=document.getElementById('propColor').value;p.checkRequired=document.getElementById('propRequired').checked;
+    const newCode=document.getElementById('propCode').value.trim();
+    if(newCode!==p.doorCode)p.doorCodeUpdatedAt=new Date().toISOString();
+    p.doorCode=newCode;
+    p.propertyStatus=document.getElementById('propSituation').value;
+    p.houseColor=propertySituation(p).color;
+    p.checkRequired=document.getElementById('propRequired').checked;
     e.querySelectorAll('[data-row]').forEach(row=>{
       const r=p.rooms[+row.dataset.row],previous=deepClone(r),nextType=row.querySelector('[data-f="type"]').value;
       if(previous.type==='client'&&nextType!=='client')archiveClient(previous,p.address,previous.room);
@@ -652,12 +714,100 @@ function renderPropertyEditor(p){
         r.checkRequired=row.querySelector('[data-f="required"]').value!=='notrequired';
         if(!r.checkRequired)delete state.currentRun.checks[checkKey(p.id,r.room)];
         if(!r.clientId)r.clientId=uuid();
-        r.workSchedule=row.querySelector('[data-f="workSchedule"]')?.value.trim()||'';
+        r.workSchedule=row.querySelector('[data-f="workSchedule"]')?.value.trim()||r.workSchedule||'';
+        r.schoolSchedule=r.schoolSchedule||'';
+        r.importantInfo=r.importantInfo||'';
       }else{r.name=r.type==='open'?'OPEN':'NO BED';r.checkRequired=false;r.clientId='';r.workSchedule=''}
       r.phone=r.type==='client'?row.querySelector('[data-f="phone"]').value.trim():'';r.color=r.type==='client'?row.querySelector('[data-f="color"]').value:'';
     });
     p.beds=p.rooms.length;await saveState();editPropertyId=null;renderProperties();
   };
+}
+
+
+/* ---------- Dedicated Client Profiles ---------- */
+function allClientProfileRecords(){
+  const out=[];
+  for(const p of state.properties)for(const r of p.rooms)if(r.type==='client')out.push({kind:'active',property:p,record:r});
+  for(const c of state.inactiveClients||[])out.push({kind:'inactive',property:null,record:c});
+  return out;
+}
+function profileSearchMatches(item,q){
+  const s=String(q||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  if(!s)return true;
+  const key=clientSearchKey(item.record.name);
+  return key.includes(s)||s.includes(key)||String(item.record.phone||'').replace(/\D/g,'').includes(s);
+}
+function inactiveProfileModal(c){
+  const wrap=document.createElement('div');wrap.className='pin-overlay';
+  wrap.innerHTML=`<div class="pin-dialog client-profile-dialog">
+    <div class="title">Client Record • ${esc(displayClientName(c.name))}</div>
+    <div class="profile-grid">
+      <div><b>Status</b><span>INACTIVE</span></div>
+      <div><b>Last Residence</b><span>${esc(c.previousAddress||'Unknown')}${c.previousRoom?` • Room ${esc(c.previousRoom)}`:''}</span></div>
+      <div><b>Phone</b><span>${c.phone?esc(fmtPhone(c.phone)):'Not entered'}</span></div>
+      <div><b>House Inspection</b><span class="${c.checkRequired!==false?'profile-required':'profile-notrequired'}">${c.checkRequired!==false?'REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</span></div>
+      <div class="profile-wide"><b>Work Schedule</b><span>${esc(c.workSchedule||'No work schedule entered.')}</span></div>
+      <div class="profile-wide"><b>School Schedule</b><span>${esc(c.schoolSchedule||'No school schedule entered.')}</span></div>
+      <div class="profile-wide"><b>Important Information</b><span>${esc(c.importantInfo||'No additional important information entered.')}</span></div>
+      <div class="profile-wide"><b>Profile Note</b><span>${esc(c.note||'No profile note entered.')}</span></div>
+    </div>
+    <div class="actions"><button class="btn primary" id="closeInactiveProfile">Close</button></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('#closeInactiveProfile').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{if(e.target===wrap)wrap.remove()};
+}
+async function editClientProfile(item){
+  if(!await requestPin('edit this client profile'))return;
+  const r=item.record,where=item.kind==='active'?`${item.property.address} • Room ${r.room}`:`Inactive • Last: ${r.previousAddress||'Unknown'}${r.previousRoom?' • Room '+r.previousRoom:''}`;
+  const wrap=document.createElement('div');wrap.className='pin-overlay';
+  wrap.innerHTML=`<div class="pin-dialog client-edit-dialog">
+    <div class="title">Edit Client Profile</div><div class="muted">${esc(where)}</div>
+    <div class="formgrid profile-edit-grid">
+      <div class="field"><label>Full Client Name</label><input id="cpName" value="${esc(r.name||'')}"></div>
+      <div class="field"><label>Cell Phone</label><input id="cpPhone" type="tel" value="${esc(r.phone||'')}"></div>
+      <div class="field"><label>House Inspection</label><select id="cpRequired"><option value="required" ${r.checkRequired!==false?'selected':''}>Inspection REQUIRED</option><option value="notrequired" ${r.checkRequired===false?'selected':''}>Inspection NOT REQUIRED</option></select></div>
+      <div class="field profile-wide"><label>Work Schedule</label><textarea id="cpWork" placeholder="Work days / hours">${esc(r.workSchedule||'')}</textarea></div>
+      <div class="field profile-wide"><label>School Schedule</label><textarea id="cpSchool" placeholder="School days / hours / campus details">${esc(r.schoolSchedule||'')}</textarea></div>
+      <div class="field profile-wide"><label>Important Information</label><textarea id="cpInfo" placeholder="Important information for house checks">${esc(r.importantInfo||'')}</textarea></div>
+      <div class="field profile-wide"><label>Profile Note</label><textarea id="cpNote" placeholder="Permanent profile note">${esc(r.note||'')}</textarea></div>
+    </div>
+    <div class="actions"><button class="btn" id="cancelClientEdit">Cancel</button><button class="btn primary" id="saveClientEdit">Save Client Profile</button></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('#cancelClientEdit').onclick=()=>wrap.remove();
+  wrap.querySelector('#saveClientEdit').onclick=async()=>{
+    r.name=wrap.querySelector('#cpName').value.trim()||'Unnamed Client';
+    r.phone=wrap.querySelector('#cpPhone').value.trim();
+    r.checkRequired=wrap.querySelector('#cpRequired').value==='required';
+    r.workSchedule=wrap.querySelector('#cpWork').value.trim();
+    r.schoolSchedule=wrap.querySelector('#cpSchool').value.trim();
+    r.importantInfo=wrap.querySelector('#cpInfo').value.trim();
+    r.note=wrap.querySelector('#cpNote').value.trim();
+    if(item.kind==='active'&&!r.checkRequired)delete state.currentRun.checks[checkKey(item.property.id,r.room)];
+    await saveState();wrap.remove();renderClientProfiles();
+  };
+}
+function renderClientProfiles(){
+  const view=document.getElementById('view'),q=clientSearchQuery,records=allClientProfileRecords().filter(x=>profileSearchMatches(x,q));
+  view.innerHTML=`<section class="panel">
+    <div class="titlebar"><div><div class="title">Client Profiles</div><div class="muted">Dedicated active/inactive client records. Search by the 3×3 name key, then view work, school, inspection requirements, and other important information.</div></div>${nameRevealButton()}</div>
+    <div class="searchbar"><input id="profileSearch" autocomplete="off" placeholder="3×3 search, e.g. Bra Wal" value="${esc(q)}"><button class="btn" id="clearProfileSearch">Clear</button></div>
+  </section>
+  <section class="profile-list">${records.map((x,i)=>`<article class="card profile-card" data-profile-row="${i}">
+    <div><div class="name ${x.record.color||'none'}">${esc(displayClientName(x.record.name))}</div>
+    <div class="meta">${x.kind==='active'?`${esc(x.property.address)} • Room ${esc(x.record.room)}`:`INACTIVE • Last: ${esc(x.record.previousAddress||'Unknown')}`}</div>
+    <div class="client-requirement ${x.record.checkRequired!==false?'required-client':'notrequired-client'}">${x.record.checkRequired!==false?'INSPECTION REQUIRED':'NOT REQUIRED • DO NOT DISTURB'}</div></div>
+    <div class="actions"><button class="btn" data-view-profile="${i}">View</button><button class="btn primary" data-edit-profile="${i}">Edit</button></div>
+  </article>`).join('')||'<div class="panel"><div class="muted">No matching client profiles.</div></div>'}</section>`;
+  const input=document.getElementById('profileSearch');
+  input.oninput=()=>{clientSearchQuery=input.value;renderClientProfiles();const a=document.getElementById('profileSearch');a?.focus();a?.setSelectionRange(a.value.length,a.value.length)};
+  document.getElementById('clearProfileSearch').onclick=()=>{clientSearchQuery='';renderClientProfiles()};
+  const nameToggle=document.getElementById('toggleNames');
+  if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientProfiles()};
+  view.querySelectorAll('[data-view-profile]').forEach(b=>b.onclick=()=>{const x=records[+b.dataset.viewProfile];if(!x)return;x.kind==='active'?showClientProfile(x.property,x.record):inactiveProfileModal(x.record)});
+  view.querySelectorAll('[data-edit-profile]').forEach(b=>b.onclick=()=>{const x=records[+b.dataset.editProfile];if(x)editClientProfile(x)});
 }
 
 /* ---------- 3x3 Client Search ---------- */
@@ -761,7 +911,7 @@ async function moveRoute(i,d){const j=i+d;if(j<0||j>=state.route.stops.length)re
 /* ---------- PIN-protected Lock Codes ---------- */
 function lockCodeText(){
   const lines=['SCC-CTD HOUSE LOCK CODES',''];
-  for(const p of orderedProperties())lines.push(`${p.address}: ${p.doorCode||'NOT ENTERED'}`);
+  for(const p of orderedProperties())lines.push(`${p.address}: ${p.doorCode||'NOT ENTERED'}${p.doorCodeUpdatedAt?` (updated ${new Date(p.doorCodeUpdatedAt).toLocaleDateString()})`:''}`);
   lines.push('',`Generated ${new Date().toLocaleString()}`);
   return lines.join('\n');
 }
@@ -785,10 +935,16 @@ function renderLockCodes(){
   if(!codesUnlocked){screen='tonight';return render()}
   const view=document.getElementById('view');
   view.innerHTML=`<section class="panel"><div class="title">House Lock Codes</div><div class="muted">PIN-protected list. Print the full sheet or use the system share sheet to send it through Messages.</div></section>
-  <section class="panel code-list" id="lockCodePrint"><div class="code-print-title">SCC-CTD HOUSE LOCK CODES</div>${orderedProperties().map(p=>`<div class="code-list-row"><b>${esc(p.address)}</b><span>${esc(p.doorCode||'NOT ENTERED')}</span></div>`).join('')}<div class="code-print-foot">${esc(new Date().toLocaleString())}</div></section>
+  <section class="panel code-list" id="lockCodePrint"><div class="code-print-title">SCC-CTD HOUSE LOCK CODES</div>${orderedProperties().map(p=>`<div class="code-list-row"><div><b>${esc(p.address)}</b><small>${p.doorCodeUpdatedAt?`Updated ${esc(new Date(p.doorCodeUpdatedAt).toLocaleString())}`:'Update date not recorded'}</small></div><span>${esc(p.doorCode||'NOT ENTERED')}</span><button class="btn code-edit-control" data-code-edit="${esc(p.id)}">Update</button></div>`).join('')}<div class="code-print-foot">${esc(new Date().toLocaleString())}</div></section>
   <section class="panel"><div class="actions"><button class="btn primary" id="printCodes">Print Full List</button><button class="btn green" id="shareCodes">Share / Message</button>${navigator.contacts?.select?'<button class="btn" id="pickCodeContact">Choose Contact</button>':''}<button class="btn" id="hideCodes">Hide Codes</button></div>
   <div class="formgrid" style="margin-top:10px"><div class="field"><label>Optional cell number fallback</label><input id="codeTextNumber" type="tel" inputmode="tel" placeholder="Cell number"></div></div><div class="actions"><button class="btn" id="textCodes">Text Number</button></div>
   <div class="notice">On iPhone, Share / Message opens the native share sheet. Choose Messages there, then select the recipient from Contacts. The web app does not need to read your address book directly.</div></section>`;
+  view.querySelectorAll('[data-code-edit]').forEach(b=>b.onclick=async()=>{
+    const p=state.properties.find(x=>x.id===b.dataset.codeEdit);if(!p)return;
+    if(!await requestPin(`update the lock code for ${p.address}`))return;
+    const val=prompt(`New lock code for ${p.address}`,p.doorCode||'');if(val===null)return;
+    p.doorCode=val.trim();p.doorCodeUpdatedAt=new Date().toISOString();await saveState();renderLockCodes();
+  });
   document.getElementById('printCodes').onclick=()=>window.print();
   document.getElementById('shareCodes').onclick=shareLockCodes;
   document.getElementById('textCodes').onclick=()=>{const n=digits(document.getElementById('codeTextNumber').value);if(n.length<10){alert('Enter a valid cell number.');return}openSms(n,lockCodeText())};
@@ -817,15 +973,57 @@ function statusFor(snapshot,p,r){
   if(requiresNote(c.status)&&!String(c.note||'').trim())return `${c.status} • NOTE REQ`;
   return c.status;
 }
+function reportMarks(status){
+  return {home:status==='Home',not:status==='Not Home',sleep:status==='Sleep',pass:status==='Pass'};
+}
+function reportNotes(snapshot,p,r){
+  if(r.type==='open'||r.type==='nobed')return [];
+  const c=snapshot.checks[checkKey(p.id,r.room)],lines=[];
+  if(r.note)lines.push(r.note);
+  if(!clientNeedsCheck(p,r))lines.push('NOT REQUIRED • DO NOT DISTURB');
+  else if(!c?.status)lines.push('REQUIRED • NO RESULT');
+  if(String(c?.note||'').trim())lines.push(`Remarks: ${String(c.note).trim()}`);
+  return lines;
+}
+function masterHouseHtml(snapshot,p){
+  const situation=propertySituationLabel(p),color=propertySituationColor(p)||'normal';
+  return `<div class="master-house master-house-${color}"><div class="master-house-title"><b>${esc(p.address)}</b>${situation!=='Normal / Active'?`<span>${esc(situation)}</span>`:''}</div>${p.rooms.map(r=>{
+    const status=statusFor(snapshot,p,r),m=reportMarks(status),notes=reportNotes(snapshot,p,r);
+    const nameClass=r.type==='client'&&r.color?` name-${r.color}`:'';
+    return `<div class="master-row ${r.type==='open'?'row-open':r.type==='nobed'?'row-nobed':''}">
+      <span class="cell roomcell">${esc(r.room)}</span>
+      <span class="cell clientcell${nameClass}">${r.type==='client'?esc(displayClientName(r.name)):esc(r.type==='open'?'OPEN / EMPTY':'NO BED')}</span>
+      <span class="cell phonecell">${r.type==='client'&&r.phone?esc(fmtPhone(r.phone)):''}</span>
+      <span class="cell checkboxcell">${m.home?'☒':'☐'}</span>
+      <span class="cell checkboxcell">${m.not?'☒':'☐'}</span>
+      <span class="cell checkboxcell">${m.sleep?'☒':'☐'}</span>
+      <span class="cell checkboxcell">${m.pass?'☒':'☐'}</span>
+      <span class="cell notescell">${notes.map((n,i)=>`<small class="${n.startsWith('Remarks:')?'remarks-line':''}">${esc(n)}</small>`).join('')}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
 function reportPaper(snapshot,id='reportPaper'){
-  const T=totalsFor(snapshot.properties,snapshot.checks),stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date(),props=[...snapshot.properties].sort(compareProperties);
-  return `<div class="paper" id="${id}">
-    <div class="paperhead"><div class="papertitle">HOUSE CHECK REPORT</div><div class="papermeta">${esc(snapshot.driverName||'Driver')} • ${esc(stamp.toLocaleString())} • ${T.checked}/${T.required} required checks • ${T.missing} unresolved • ${T.notRequired} clients N/R</div></div>
-    <div class="papergrid">${props.map(p=>`<div class="paperhouse house-${p.houseColor||'none'}"><h4>${esc(p.address)} • ${p.beds} beds${propertyNeedsChecks(p)?'':' • NO REQUIRED CHECKS'}</h4>${p.rooms.map(r=>{
-      const status=statusFor(snapshot,p,r),c=snapshot.checks[checkKey(p.id,r.room)],nightNote=String(c?.note||'').trim(), cls=r.type==='open'?'open':r.type==='nobed'?'nobed':!clientNeedsCheck(p,r)?'notrequired':(status.includes('NO RESULT')||status.includes('NOTE REQ'))?'missing':r.color||'';
-      return `<div class="paperrow ${cls}"><span>${esc(r.room)}</span><span>${esc(displayClientName(r.name))}${nightNote?`<small class="report-note"><b>Remarks:</b> ${esc(nightNote)}</small>`:''}</span><span>${esc(status)}</span></div>`;
-    }).join('')}</div>`).join('')}</div>
-    <div class="paperfoot">Complete roster report. REQUIRED • NO RESULT means a required client has no recorded check result. NOT REQUIRED remains on the report without counting as unresolved. Report anyone you can't reach and can't see to the on-call person.</div>
+  const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date(),props=[...snapshot.properties].sort(compareProperties),split=Math.ceil(props.length/2),left=props.slice(0,split),right=props.slice(split);
+  const colHead=`<div class="master-col-head"><span>Rm</span><span>Client Name</span><span>Cell Phone</span><span>Home</span><span>Not</span><span>Sleep</span><span>Pass</span><span>Notes</span></div>`;
+  return `<div class="paper master-sheet" id="${id}">
+    <div class="master-sheet-title">HOUSE CHECK RUN SHEET</div>
+    <div class="master-meta"><span><b>DATE / TIME:</b> ${esc(stamp.toLocaleString())}</span><span><b>DRIVER:</b> ${esc(snapshot.driverName||'Driver')}</span></div>
+    <div class="master-instruction">SEE THEM • VERIFY THE NAME • CHECK THE STATUS • LEAVE A USEFUL NOTE</div>
+    <div class="master-columns">
+      <div class="master-column">${colHead}${left.map(p=>masterHouseHtml(snapshot,p)).join('')}</div>
+      <div class="master-column">${colHead}${right.map(p=>masterHouseHtml(snapshot,p)).join('')}</div>
+    </div>
+    <div class="master-footer">
+      <div class="master-legend"><b>ORIGINAL SHEET COLOR STATUS</b><span class="legend red">No Bed</span><span class="legend gray">Not moved yet</span><span class="legend yellow">Open</span><span class="legend darkgray">Out of Services</span><span class="legend rose">Can not Bill for</span></div>
+      <div class="master-rules">
+        <b>ORIGINAL SHEET NOTES</b>
+        <span>Please don't call clients before 10 pm.</span>
+        <span>You must actually see the clients and ask their name to be sure you have the correct client.</span>
+        <span>Curfew for 2.1 is 10 on weekday and 11 for weekends. 1.0 dose not have a curfew.</span>
+        <span>Call Clients after 10 pm on weekdays and ask where they are at and after 11 pm on weekends.</span>
+        <span>PLEASE REPORT ANYONE YOU CANT REACH AND CAN'T SEE TO ON CALL PERSON.</span>
+      </div>
+    </div>
   </div>`;
 }
 function renderReport(){
@@ -843,7 +1041,7 @@ function renderReport(){
     document.getElementById('approveReport').onclick=()=>{
       const issues=requiredNoteIssues();
       if(issues.length){
-        alert(`${issues.length} non-Home result${issues.length===1?'':'s'} still require${issues.length===1?'s':''} a note. First: ${displayClientName(issues[0].name)} at ${issues[0].address} (${issues[0].status}).`);
+        alert(`${issues.length} NOT HOME result${issues.length===1?'':'s'} still require${issues.length===1?'s':''} a note. First: ${displayClientName(issues[0].name)} at ${issues[0].address}.`);
         return;
       }
       reportApproved=true;renderReport();
@@ -858,21 +1056,75 @@ function renderReport(){
   }
 }
 async function makeReportPng(snapshot){
-  const W=1650,margin=34,gap=22,cols=2,cw=(W-margin*2-gap)/cols,hh=32,rowBase=28,noteLine=18;
-  const measure=document.createElement('canvas').getContext('2d');measure.font='14px system-ui';
-  const wrap=(text,maxWidth,font='14px system-ui')=>{measure.font=font;const words=String(text||'').split(/\s+/).filter(Boolean),lines=[];let line='';for(const w of words){const t=line?line+' '+w:w;if(measure.measureText(t).width>maxWidth&&line){lines.push(line);line=w}else line=t}if(line)lines.push(line);return lines.length?lines:['']};
-  const props=[...snapshot.properties].sort(compareProperties);
-  const blocks=props.map(p=>{
-    let h=hh+6;const rows=p.rooms.map(r=>{const c=snapshot.checks[checkKey(p.id,r.room)],note=String(c?.note||'').trim(),name=maskClientName(r.name),status=statusFor(snapshot,p,r);const noteLines=note?wrap('Remarks: '+note,cw-28,'13px system-ui'):[];const rh=rowBase+noteLines.length*noteLine;h+=rh;return {r,c,note,name,status,noteLines,rh}});return {p,rows,h:h+6};
+  const W=2200,margin=32,gap=24,half=(W-margin*2-gap)/2;
+  const widths=[48,224,150,58,58,58,58,half-(48+224+150+58*4)];
+  const xPos=widths.reduce((a,w)=>{a.push(a[a.length-1]+w);return a},[0]);
+  const measure=document.createElement('canvas').getContext('2d');
+  const wrap=(text,maxWidth,font='13px Arial')=>{measure.font=font;const words=String(text||'').split(/\s+/).filter(Boolean),lines=[];let line='';for(const w of words){const t=line?line+' '+w:w;if(measure.measureText(t).width>maxWidth&&line){lines.push(line);line=w}else line=t}if(line)lines.push(line);return lines};
+  const props=[...snapshot.properties].sort(compareProperties),split=Math.ceil(props.length/2),cols=[props.slice(0,split),props.slice(split)];
+  const model=cols.map(col=>col.map(p=>{
+    const rows=p.rooms.map(r=>{
+      const status=statusFor(snapshot,p,r),marks=reportMarks(status),notes=reportNotes(snapshot,p,r);
+      const noteLines=notes.flatMap(n=>wrap(n,widths[7]-12,'13px Arial'));
+      const rowH=Math.max(34,18+Math.max(1,noteLines.length)*17);
+      return {r,status,marks,noteLines,rowH};
+    });
+    return {p,rows,h:30+rows.reduce((n,r)=>n+r.rowH,0)};
+  }));
+  const headerH=116,colHeadH=34,footerH=250;
+  const colHeights=model.map(col=>headerH+colHeadH+col.reduce((n,h)=>n+h.h+6,0)+footerH);
+  const H=Math.max(1250,Math.ceil(Math.max(...colHeights)));
+  const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+  g.fillStyle='#fff';g.fillRect(0,0,W,H);g.textBaseline='middle';
+  g.fillStyle='#111';g.textAlign='center';g.font='bold 28px Arial';g.fillText('HOUSE CHECK RUN SHEET',W/2,28);
+  const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();
+  g.textAlign='left';g.font='bold 15px Arial';g.fillText('DATE / TIME:',margin,62);g.font='15px Arial';g.fillText(stamp.toLocaleString(),margin+115,62);
+  g.textAlign='right';g.font='bold 15px Arial';g.fillText(`DRIVER: ${snapshot.driverName||'Driver'}`,W-margin,62);
+  g.textAlign='center';g.font='bold 14px Arial';g.fillText('SEE THEM • VERIFY THE NAME • CHECK THE STATUS • LEAVE A USEFUL NOTE',W/2,92);
+
+  const labels=['Rm','Client Name','Cell Phone','Home','Not','Sleep','Pass','Notes'];
+  const propertyFill=p=>({yellow:'#f3d96f',gray:'#c6cbd0',darkgray:'#7e878d',rose:'#e8aaaa'}[propertySituationColor(p)]||'#d7e7f4');
+  const drawCell=(x,y,w,h,fill='#fff')=>{g.fillStyle=fill;g.fillRect(x,y,w,h);g.strokeStyle='#666';g.lineWidth=1;g.strokeRect(x,y,w,h)};
+  const drawCheck=(cx,cy,on)=>{g.strokeStyle='#222';g.lineWidth=1.5;g.strokeRect(cx-8,cy-8,16,16);if(on){g.beginPath();g.moveTo(cx-5,cy);g.lineTo(cx-1,cy+5);g.lineTo(cx+6,cy-6);g.stroke()}};
+
+  model.forEach((col,ci)=>{
+    const baseX=margin+ci*(half+gap);let y=headerH;
+    for(let i=0;i<8;i++){drawCell(baseX+xPos[i],y,widths[i],colHeadH,'#f0f0f0');g.fillStyle='#111';g.font='bold 11px Arial';g.textAlign='center';g.fillText(labels[i],baseX+xPos[i]+widths[i]/2,y+colHeadH/2)}
+    y+=colHeadH;
+    for(const h of col){
+      drawCell(baseX,y,half,30,propertyFill(h.p));g.fillStyle='#111';g.textAlign='left';g.font='bold 13px Arial';g.fillText(h.p.address,baseX+7,y+15);
+      const sit=propertySituationLabel(h.p);if(sit!=='Normal / Active'){g.textAlign='right';g.font='bold 11px Arial';g.fillText(sit,baseX+half-7,y+15)}
+      y+=30;
+      for(const row of h.rows){
+        const r=row.r;
+        let baseFill='#fff';if(r.type==='open')baseFill='#fff4a6';else if(r.type==='nobed')baseFill='#e46a61';
+        for(let i=0;i<8;i++)drawCell(baseX+xPos[i],y,widths[i],row.rowH,baseFill);
+        if(r.type==='client'&&r.color==='green'){g.fillStyle='#cdebe3';g.fillRect(baseX+xPos[1],y,widths[1],row.rowH);g.strokeStyle='#666';g.strokeRect(baseX+xPos[1],y,widths[1],row.rowH)}
+        if(r.type==='client'&&r.color==='gray'){g.fillStyle='#ddd';g.fillRect(baseX+xPos[1],y,widths[1],row.rowH);g.strokeStyle='#666';g.strokeRect(baseX+xPos[1],y,widths[1],row.rowH)}
+        g.fillStyle='#111';g.font='13px Arial';g.textAlign='center';g.fillText(r.room,baseX+xPos[0]+widths[0]/2,y+17);
+        g.textAlign='left';g.fillText(r.type==='client'?maskClientName(r.name):(r.type==='open'?'OPEN / EMPTY':'NO BED'),baseX+xPos[1]+6,y+17);
+        if(r.type==='client'&&r.phone){g.font='11px Arial';g.fillText(fmtPhone(r.phone),baseX+xPos[2]+5,y+17)}
+        if(r.type==='client'){const arr=[row.marks.home,row.marks.not,row.marks.sleep,row.marks.pass];for(let k=0;k<4;k++)drawCheck(baseX+xPos[3+k]+widths[3+k]/2,y+17,arr[k])}
+        g.font='12px Arial';g.textAlign='left';row.noteLines.forEach((line,li)=>g.fillText(line,baseX+xPos[7]+5,y+13+li*17));
+        y+=row.rowH;
+      }
+      y+=6;
+    }
   });
-  const columns=[[],[]],heights=[76,76];for(const b of blocks){const i=heights[0]<=heights[1]?0:1;columns[i].push(b);heights[i]+=b.h+10}
-  const footerH=58,H=Math.max(1100,Math.ceil(Math.max(...heights)+footerH));
-  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,W,H);
-  x.fillStyle='#111';x.font='bold 30px system-ui';x.textAlign='left';x.fillText('HOUSE CHECK REPORT',margin,42);const stamp=snapshot.completedAt?new Date(snapshot.completedAt):new Date();x.textAlign='right';x.font='16px system-ui';x.fillText(`${snapshot.driverName||'Driver'} • ${stamp.toLocaleString()}`,W-margin,42);x.strokeStyle='#17365d';x.lineWidth=3;x.beginPath();x.moveTo(margin,56);x.lineTo(W-margin,56);x.stroke();
-  const headColors={green:'#3d856d',gray:'#65717a',yellow:'#b59c34',red:'#a84742'};
-  columns.forEach((col,ci)=>{let py=76,px=margin+ci*(cw+gap);for(const b of col){const p=b.p;x.strokeStyle='#555';x.strokeRect(px,py,cw,b.h);x.fillStyle=headColors[p.houseColor]||'#2d6f9f';x.fillRect(px,py,cw,hh);x.fillStyle=p.houseColor==='yellow'?'#111':'#fff';x.font='bold 13px system-ui';x.textAlign='left';x.fillText(`${p.address} • ${p.beds} beds${propertyNeedsChecks(p)?'':' • NO REQUIRED CHECKS'}`,px+8,py+21);let ry=py+hh;
-      for(const row of b.rows){let fill='#fff';if(row.r.type==='open')fill='#fff4a6';else if(row.r.type==='nobed')fill='#e46a61';else if(!clientNeedsCheck(p,row.r))fill='#f2edcf';else if(row.status.includes('NO RESULT')||row.status.includes('NOTE REQ'))fill='#ffd9d6';else if(row.r.color==='green')fill='#cdebe3';else if(row.r.color==='gray')fill='#ddd';x.fillStyle=fill;x.fillRect(px,ry,cw,row.rh);x.strokeStyle='#bbb';x.strokeRect(px,ry,cw,row.rh);x.fillStyle='#111';x.font='13px system-ui';x.textAlign='left';x.fillText(`${row.r.room}  ${row.name}`,px+7,ry+18);x.textAlign='right';x.font='bold 12px system-ui';x.fillText(row.status,px+cw-7,ry+18);if(row.noteLines.length){x.textAlign='left';x.font='13px system-ui';row.noteLines.forEach((line,li)=>x.fillText(line,px+22,ry+rowBase+13+li*noteLine))}ry+=row.rh}py+=b.h+10}});
-  x.fillStyle='#111';x.textAlign='left';x.font='13px system-ui';x.fillText('Complete roster report. Required clients without a result are labeled REQUIRED • NO RESULT. Remarks are shown in full on their own lines.',margin,H-24);
+
+  let fy=H-footerH+18;
+  g.fillStyle='#111';g.textAlign='left';g.font='bold 14px Arial';g.fillText('ORIGINAL SHEET COLOR STATUS',margin,fy);fy+=22;
+  const legend=[['No Bed','#e46a61'],['Not moved yet','#c6cbd0'],['Open','#f3d96f'],['Out of Services','#7e878d'],['Can not Bill for','#e8aaaa']];
+  legend.forEach(([label,color],i)=>{const yy=fy+i*24;g.fillStyle=color;g.fillRect(margin,yy-8,22,16);g.strokeStyle='#666';g.strokeRect(margin,yy-8,22,16);g.fillStyle='#111';g.font='13px Arial';g.fillText(label,margin+32,yy)});
+  const rules=[
+    "Please don't call clients before 10 pm.",
+    "You must actually see the clients and ask their name to be sure you have the correct client.",
+    "Curfew for 2.1 is 10 on weekday and 11 for weekends. 1.0 dose not have a curfew.",
+    "Call Clients after 10 pm on weekdays and ask where they are at and after 11 pm on weekends.",
+    "PLEASE REPORT ANYONE YOU CANT REACH AND CAN'T SEE TO ON CALL PERSON."
+  ];
+  const rx=margin+520;g.font='bold 14px Arial';g.fillText('ORIGINAL SHEET NOTES',rx,H-footerH+18);g.font='13px Arial';let ry=H-footerH+44;
+  for(const rule of rules){const lines=wrap(rule,W-rx-margin,'13px Arial');for(const line of lines){g.fillText(line,rx,ry);ry+=18}ry+=5}
   return new Promise(res=>c.toBlob(res,'image/png',.95));
 }
 function reportFilename(snapshot){const d=(snapshot.completedAt?new Date(snapshot.completedAt):new Date()).toISOString().slice(0,10);return `house-check-report-${d}.png`}
@@ -897,7 +1149,7 @@ async function emailSnapshot(snapshot){
 async function completeRun(){
   const issues=requiredNoteIssues();
   if(issues.length){
-    alert(`Cannot complete this run yet. ${issues.length} non-Home result${issues.length===1?'':'s'} still need${issues.length===1?'s':''} a note.`);
+    alert(`Cannot complete this run yet. ${issues.length} NOT HOME result${issues.length===1?'':'s'} still need${issues.length===1?'s':''} a note.`);
     reportApproved=false;
     renderReport();
     return;
@@ -983,7 +1235,7 @@ async function importPrivateData(file){
   await saveState();
 }
 function exportPrivateData(){
-  const payload={schemaVersion:5,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
+  const payload={schemaVersion:6,properties:state.properties,inactiveClients:state.inactiveClients,locations:state.locations,route:state.route,settings:state.settings};
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');
   a.href=u;a.download='SCC_CTD_House_Checks_PRIVATE_Backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1200);
 }
@@ -992,8 +1244,8 @@ function renderDatabase(){
   const bedOptions=openBeds.map(x=>`<option value="${esc(x.property.id)}::${esc(x.room.room)}">${esc(x.property.address)} • Room ${esc(x.room.room)}</option>`).join('');
   view.innerHTML=`<section class="panel"><div class="titlebar"><div><div class="title">Private Data Import / Backup</div><div class="muted">Removing a client from a house now moves that record to Inactive instead of deleting it.</div></div>${nameRevealButton()}</div><div class="actions"><label class="btn primary" for="importData">Import Private Data</label><input id="importData" type="file" accept=".json,application/json" style="display:none"><button class="btn" id="exportData">Export Private Backup</button></div><div id="importMessage" class="muted" style="margin-top:6px"></div></section>
   <section class="panel"><div class="title">Internal Database</div><div class="dbstats"><div class="stat"><strong>${state.properties.length}</strong>Properties</div><div class="stat"><strong>${beds}</strong>Beds</div><div class="stat"><strong>${active.length}</strong>Active Clients</div><div class="stat"><strong>${inactive.length}</strong>Inactive Clients</div><div class="stat"><strong>${state.history.length}</strong>Reports</div></div></section>
-  <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(x=>`<div class="registry-row"><b>${esc(displayClientName(x.room.name))}</b><span>${esc(x.property.address)} • Room ${esc(x.room.room)}</span><small>${x.room.workSchedule?`Work: ${esc(x.room.workSchedule)}`:'No work schedule entered'}</small></div>`).join('')||'<div class="muted">No active clients.</div>'}</div></section>
-  <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Records stay here so returning clients can be restored instead of re-created.</div><div class="registry-list">${inactive.map((c,i)=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}</small>${openBeds.length?`<div class="registry-restore"><select data-restore-bed="${i}">${bedOptions}</select><button class="btn" data-restore="${i}">Reactivate</button></div>`:'<small>No OPEN bed is currently available for reactivation.</small>'}</div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
+  <section class="panel"><div class="title">Active Client Registry</div><div class="registry-list">${active.map(x=>`<div class="registry-row"><b>${esc(displayClientName(x.room.name))}</b><span>${esc(x.property.address)} • Room ${esc(x.room.room)}</span><small>${x.room.workSchedule?`Work: ${esc(x.room.workSchedule)}`:'No work schedule entered'}${x.room.schoolSchedule?` • School: ${esc(x.room.schoolSchedule)}`:''}</small></div>`).join('')||'<div class="muted">No active clients.</div>'}</div></section>
+  <section class="panel"><div class="title">Inactive Client Registry</div><div class="muted">Records stay here so returning clients can be restored instead of re-created.</div><div class="registry-list">${inactive.map((c,i)=>`<div class="registry-row inactive-row"><b>${esc(displayClientName(c.name))}</b><span>Last: ${esc(c.previousAddress||'Unknown')} ${c.previousRoom?`• Room ${esc(c.previousRoom)}`:''}</span><small>${c.workSchedule?`Work: ${esc(c.workSchedule)}`:'No work schedule entered'}${c.schoolSchedule?` • School: ${esc(c.schoolSchedule)}`:''}</small>${openBeds.length?`<div class="registry-restore"><select data-restore-bed="${i}">${bedOptions}</select><button class="btn" data-restore="${i}">Reactivate</button></div>`:'<small>No OPEN bed is currently available for reactivation.</small>'}</div>`).join('')||'<div class="muted">No inactive clients.</div>'}</div></section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderDatabase()};
   document.getElementById('importData').onchange=async()=>{
@@ -1006,7 +1258,7 @@ function renderDatabase(){
     const i=+b.dataset.restore,c=state.inactiveClients[i],sel=view.querySelector(`[data-restore-bed="${i}"]`);if(!c||!sel)return;
     const [pid,roomNo]=sel.value.split('::'),p=state.properties.find(x=>x.id===pid),r=p?.rooms.find(x=>String(x.room)===roomNo);
     if(!p||!r||r.type!=='open'){alert('That bed is no longer open. Refresh and choose another.');return}
-    Object.assign(r,{type:'client',name:c.name,phone:c.phone,color:c.color,note:c.note,checkRequired:c.checkRequired,clientId:c.clientId||uuid(),workSchedule:c.workSchedule||''});
+    Object.assign(r,{type:'client',name:c.name,phone:c.phone,color:c.color,note:c.note,checkRequired:c.checkRequired,clientId:c.clientId||uuid(),workSchedule:c.workSchedule||'',schoolSchedule:c.schoolSchedule||'',importantInfo:c.importantInfo||''});
     state.inactiveClients.splice(i,1);await saveState();renderDatabase();
   });
 }

@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.4.2
+# SCC-CTD House Checks v1.4.3
 
 GitHub-ready public PWA build.
 
-## v1.4.2 changes
+## v1.4.3 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -33,3 +33,12 @@ V1.4.2 HOUSE-INSPECTION REQUIREMENT FIXES
 - NOT REQUIRED clients show DO NOT DISTURB • HOUSE CHECK NOT REQUIRED.
 - Client Record shows the stored inspection requirement.
 - One-time migration applies the original roster rule: green/gray highlighted clients become NOT REQUIRED; unhighlighted clients become REQUIRED.
+
+
+V1.4.3 MASTER-SHEET / PROFILE / UPDATE PASS
+- Final report preview and PNG now mirror the master run sheet: Date/Time, Driver, two side-by-side house columns, Rm / Client Name / Cell Phone / Home / Not / Sleep / Pass / Notes, original status legend, and original instruction block.
+- Nightly remarks appear as their own Remarks line in the Notes column.
+- Added dedicated Client Profiles navigation with 3x3 search, active/inactive records, work schedule, school schedule, important information, permanent note, and inspection requirement. Editing requires PIN.
+- Property colors are no longer arbitrary. Property Situation controls the display color: Normal / Active, Open, Not moved yet, Out of Services, or Can not Bill for.
+- Lock Codes now record the last change date and can be updated quickly from the PIN-protected code screen.
+- Added hard cache-busted asset URLs, no-cache service-worker fetches, and a safe Refresh App Files button that clears only app caches/service workers and preserves encrypted IndexedDB data.

@@ -1,16 +1,35 @@
-
-const CACHE='scc-housechecks-v1.4.2';
-const ASSETS=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./icon-180.png','./icon-192.png','./icon-512.png'];
-self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});
+const CACHE='scc-housechecks-v1.4.3';
+const FALLBACK='./index.html?v=1.4.3';
+const ASSETS=[
+  FALLBACK,
+  './styles.css?v=1.4.3',
+  './app.js?v=1.4.3',
+  './manifest.webmanifest?v=1.4.3',
+  './icon-180.png?v=1.4.3',
+  './icon-192.png?v=1.4.3',
+  './icon-512.png?v=1.4.3'
+];
+self.addEventListener('install',e=>{
+  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));
+});
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([
   self.clients.claim(),
-  caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
+  caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE&&k.startsWith('scc-housechecks-')).map(k=>caches.delete(k))))
 ])));
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
   if(e.request.mode==='navigate'){
-    e.respondWith(fetch(e.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return r}).catch(()=>caches.match('./index.html')));
+    e.respondWith(
+      fetch(e.request,{cache:'no-store'}).then(r=>{
+        const copy=r.clone();caches.open(CACHE).then(c=>c.put(FALLBACK,copy));return r;
+      }).catch(()=>caches.match(FALLBACK))
+    );
     return;
   }
-  e.respondWith(fetch(e.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return r}).catch(()=>caches.match(e.request)));
+  e.respondWith(
+    fetch(e.request,{cache:'no-store'}).then(r=>{
+      const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return r;
+    }).catch(()=>caches.match(e.request))
+  );
 });

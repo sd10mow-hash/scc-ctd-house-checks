@@ -455,3 +455,57 @@ a{color:var(--accent)}
   border-color:rgba(71,235,211,.34);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 18px 44px rgba(0,0,0,.36),0 0 0 1px rgba(71,235,211,.06);
 }
+
+
+/* v1.4.3 master-sheet report + semantic property situations + profiles */
+.update-box{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.field-help{font-size:10px;color:var(--muted);margin-top:4px}
+.property-situation{font-size:10px;color:var(--muted);font-weight:800;margin:3px 0 5px}
+.house-color.darkgray{background:#6f777d}.house-color.rose{background:#d78f91}
+.card.house-darkgray{box-shadow:inset 4px 0 0 #6f777d,inset 0 1px 0 rgba(255,255,255,.055),0 14px 36px rgba(0,0,0,.28)}
+.card.house-rose{box-shadow:inset 4px 0 0 #d78f91,inset 0 1px 0 rgba(255,255,255,.055),0 14px 36px rgba(0,0,0,.28)}
+.profile-list{display:grid;gap:8px}
+.profile-card{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.client-edit-dialog{max-width:720px}
+.profile-edit-grid textarea{min-height:76px}
+.code-list-row{grid-template-columns:minmax(0,1fr) auto auto}
+.code-list-row small{display:block;color:var(--muted);font-size:9px;margin-top:3px}
+.code-edit-control{font-size:10px;min-height:34px;padding:5px 8px}
+
+/* Master sheet report mirrors the established run-sheet structure */
+.paper.master-sheet{width:10.5in;min-height:7.7in;padding:.12in;font-family:Arial,Helvetica,sans-serif}
+.master-sheet-title{text-align:center;font-size:14px;font-weight:950;letter-spacing:.03em;margin:0 0 4px}
+.master-meta{display:flex;justify-content:space-between;font-size:7.5px;border-bottom:1px solid #555;padding:2px 3px 4px}
+.master-instruction{text-align:center;font-size:6.5px;font-weight:900;padding:3px;border-bottom:1px solid #777}
+.master-columns{display:grid;grid-template-columns:1fr 1fr;gap:5px;align-items:start;margin-top:4px}
+.master-col-head,.master-row{display:grid;grid-template-columns:20px 1.55fr 1.05fr 30px 30px 30px 30px 2.25fr}
+.master-col-head{font-size:5.8px;font-weight:900;background:#ececec;border:1px solid #555;border-bottom:0;text-align:center}
+.master-col-head span{padding:2px 1px;border-right:1px solid #aaa}.master-col-head span:last-child{border-right:0}
+.master-house{border:1px solid #555;margin:0 0 4px;break-inside:avoid}
+.master-house-title{display:flex;justify-content:space-between;gap:5px;align-items:center;background:#d7e7f4;padding:2px 3px;font-size:6px;font-weight:900}
+.master-house-title span{font-size:5px}
+.master-house-yellow .master-house-title{background:#f3d96f}.master-house-gray .master-house-title{background:#c6cbd0}.master-house-darkgray .master-house-title{background:#7e878d;color:#fff}.master-house-rose .master-house-title{background:#e8aaaa}
+.master-row{font-size:5.6px;min-height:15px}
+.master-row .cell{padding:2px;border-top:1px solid #aaa;border-right:1px solid #aaa;min-width:0}
+.master-row .cell:last-child{border-right:0}
+.master-row .roomcell,.master-row .checkboxcell{text-align:center}
+.master-row .checkboxcell{font-size:7px;font-weight:900}
+.master-row .phonecell{white-space:nowrap;font-size:5px}
+.master-row .notescell{display:grid;gap:1px}
+.master-row .notescell small{display:block;font-size:4.9px;line-height:1.15}
+.master-row .remarks-line{font-weight:900}
+.master-row.row-open{background:#fff4a6}.master-row.row-nobed{background:#e46a61}
+.master-row .clientcell.name-green{background:#cdebe3;font-weight:850}.master-row .clientcell.name-gray{background:#ddd;font-weight:850}
+.master-footer{display:grid;grid-template-columns:1fr 2fr;gap:8px;border-top:1px solid #555;margin-top:4px;padding-top:4px;font-size:5.3px}
+.master-legend,.master-rules{display:grid;gap:2px}
+.master-legend .legend{padding:1px 3px;border:1px solid #999}.master-legend .red{background:#e46a61}.master-legend .gray{background:#c6cbd0}.master-legend .yellow{background:#f3d96f}.master-legend .darkgray{background:#7e878d;color:#fff}.master-legend .rose{background:#e8aaaa}
+
+@media(max-width:700px){
+  .profile-card{display:grid}
+  .paper.master-sheet{transform:scale(.56);transform-origin:top left;margin-bottom:-3.3in}
+}
+@media(max-width:430px){.paper.master-sheet{transform:scale(.45);margin-bottom:-4.25in}}
+@media print{
+  #reportPaper.master-sheet{position:absolute!important;left:0!important;top:0!important;width:10.5in!important;min-height:7.7in!important;padding:.08in!important;margin:0!important;box-shadow:none!important;transform:none!important}
+  #lockCodePrint .code-edit-control{display:none!important}
+}
