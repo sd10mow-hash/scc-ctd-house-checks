@@ -1,8 +1,8 @@
-# SCC-CTD House Checks v1.5.2
+# SCC-CTD House Checks v1.5.3
 
 GitHub-ready public PWA build.
 
-## v1.5.2 changes
+## v1.5.3 changes
 - Per-client **Required / Not Required** field. Required clients without a result appear as `REQUIRED • NO RESULT`, not a vague `MISSING`.
 - Property edit/remove is protected by the app PIN. Editing now scrolls directly to the editor.
 - Required houses sort first; same-street houses sort by ascending house number.
@@ -57,7 +57,7 @@ V1.4.4 ENCRYPTED WORK-EMAIL DATABASE TRANSFER
 V1.4.5 REPORTER IDENTITY / AUDIT LABEL
 - Every phone now has a local user profile: full name, job title/role, and approved work email.
 - New installations ask for that identity during first-time setup.
-- Existing installations upgraded to v1.5.2 ask “Who is using this phone?” after the next successful PIN unlock.
+- Existing installations upgraded to v1.5.3 ask “Who is using this phone?” after the next successful PIN unlock.
 - Final report header now prints REPORTED BY: <name> instead of DRIVER.
 - Historical reports remain backward-compatible with older driverName snapshots.
 - Encrypted database transfers intentionally do NOT transfer the sender's local user identity to the recipient phone.
@@ -131,3 +131,18 @@ V1.5.2 SIX-DOOR MAIN SCREEN
 - Main menu stretches vertically to use the available screen without rendering module content underneath.
 - Responsive height rules keep all six controls usable on shorter iPhone screens.
 - Hidden/support functions remain available inside the existing code but are no longer exposed as main-screen buttons; module-by-module consolidation will follow.
+
+
+V1.5.3 BRANDING + INSPECTIONS CALENDAR
+- Replaced the old house artwork with the supplied Shawnee Counseling Center hand mark.
+- Header now places the Shawnee mark directly beside the business name and Transportation identity.
+- Home module labels are left-justified.
+- Inspections now opens to an explorable monthly calendar.
+- Current day is green. Dates containing completed reports are pink.
+- If today also has a completed report, the green current-day cell carries a pink completion corner marker.
+- Tapping today opens the current inspection worklist.
+- Tapping a past date with one saved report requests the app PIN and opens the saved report.
+- Completed reports are shown in a full-size scrollable/pinch-zoom viewer on iPhone.
+- Historical report Print, Text, and Email actions require the app PIN.
+- Completed runs return to the Inspections calendar and mark that date there instead of sending the user to a separate History screen.
+- The existing app PIN is reused for report security; this build does not create a second report password.

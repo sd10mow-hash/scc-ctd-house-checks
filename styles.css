@@ -761,3 +761,137 @@ a{color:var(--accent)}
   .home-menu{gap:6px;grid-template-rows:repeat(6,minmax(54px,1fr))}
   .home-module-button{min-height:56px}
 }
+
+
+/* v1.5.3 Shawnee mark + left-aligned main navigation */
+.brandrow{gap:9px}
+.appmark.shawnee-mark{
+  width:48px;
+  height:58px;
+  object-fit:contain;
+  border-radius:0;
+  box-shadow:none;
+  background:transparent;
+  flex:0 0 auto;
+}
+.brand{font-size:18px;line-height:1.05}
+.transportation-label{
+  color:#77d33d;
+  font-weight:900;
+  letter-spacing:.08em;
+  margin-top:3px;
+}
+.home-module-button{
+  grid-template-columns:52px 1fr 28px;
+  justify-items:stretch;
+  text-align:left;
+}
+.home-module-icon{justify-self:start}
+.home-module-label{
+  justify-self:start;
+  width:100%;
+  text-align:left;
+}
+.home-module-button::after{justify-self:end}
+
+/* v1.5.3 Inspections calendar */
+.inspection-calendar-intro{margin-bottom:10px}
+.inspection-calendar .calcell{
+  position:relative;
+  min-height:62px;
+  overflow:hidden;
+  transition:transform .12s ease,border-color .12s ease,background .12s ease;
+}
+.inspection-calendar .calcell:disabled{
+  opacity:.38;
+  cursor:default;
+}
+.inspection-calendar .calcell:not(:disabled):active{transform:scale(.97)}
+.inspection-calendar .inspection-has-report:not(.inspection-today){
+  border-color:rgba(255,92,151,.72);
+  background:linear-gradient(180deg,rgba(255,83,146,.22),rgba(255,83,146,.09));
+}
+.inspection-calendar .inspection-today{
+  border-color:rgba(119,211,61,.88);
+  background:linear-gradient(180deg,rgba(119,211,61,.24),rgba(119,211,61,.08));
+  box-shadow:0 0 0 1px rgba(119,211,61,.22) inset;
+}
+.inspection-calendar .inspection-day.selected{
+  outline:2px solid rgba(255,255,255,.22);
+  outline-offset:1px;
+}
+.calendar-marker{
+  font-size:8px;
+  line-height:1;
+  font-weight:950;
+  letter-spacing:.05em;
+}
+.today-marker{color:#8ce75a}
+.report-marker{color:#ff74aa}
+.completed-corner{
+  position:absolute;
+  top:5px;
+  right:5px;
+  width:8px;
+  height:8px;
+  border-radius:3px;
+  background:#ff5f9e;
+  box-shadow:0 0 0 2px rgba(255,95,158,.16);
+}
+.calendar-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  margin-top:11px;
+  color:var(--muted);
+  font-size:11px;
+}
+.calendar-legend span{display:flex;align-items:center;gap:6px}
+.legend-box{
+  width:13px;
+  height:13px;
+  border-radius:4px;
+  display:inline-block;
+}
+.legend-today{background:rgba(119,211,61,.26);border:1px solid rgba(119,211,61,.88)}
+.legend-report{background:rgba(255,83,146,.24);border:1px solid rgba(255,92,151,.72)}
+.today-report-available{
+  margin-top:12px;
+  padding:10px;
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  border:1px solid rgba(255,95,158,.26);
+  background:rgba(255,95,158,.06);
+  border-radius:12px;
+  font-size:12px;
+}
+.secure-action-note{
+  color:#aab4ba;
+  font-size:12px;
+  margin-bottom:10px;
+}
+.inspection-report-zoom{
+  overflow:auto;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-x pan-y pinch-zoom;
+  overscroll-behavior:contain;
+}
+.inspection-report-zoom .paper.master-sheet{
+  transform:none !important;
+  margin-bottom:0 !important;
+  min-width:10.5in;
+  transform-origin:top left;
+}
+@media(max-width:560px){
+  .appmark.shawnee-mark{width:42px;height:50px}
+  .brand{font-size:15px}
+  .transportation-label{font-size:9px}
+  .home-module-button{
+    grid-template-columns:44px 1fr 24px;
+  }
+  .inspection-calendar .calcell{min-height:50px}
+  .calendar-marker{font-size:7px}
+}
