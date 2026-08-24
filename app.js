@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.5.5';
+const VERSION='1.5.6';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -12,6 +12,7 @@ let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
 let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
 let inspectionView='calendar',inspectionDayKey=null,reportOrigin='menu';
+let settingsView='menu';
 let routePickerOpen=false,routePickerDraft=null;
 let codesUnlocked=false;
 
@@ -99,7 +100,7 @@ const checkKey=(pid,room)=>`${pid}::${room}`;
 
 function defaultState(){
   return {
-    schemaVersion:18,
+    schemaVersion:19,
     properties:[],
     inactiveClients:[],
     locations:ensureBaseLocations([]),
@@ -246,7 +247,7 @@ function normalizeState(raw){
       if(!p.doorCodeUpdatedAt&&p.doorCode)p.doorCodeUpdatedAt='';
     }
   }
-  d.schemaVersion=18;
+  d.schemaVersion=19;
   return d;
 }
 function getCheck(pid,room){
@@ -349,7 +350,7 @@ async function setupDatabase(pin,reportNumber,reporterName,authorizedUserCell,us
   state.settings.authorizedUserCell=digits(authorizedUserCell);
   state.settings.userWorkEmail=String(userWorkEmail||'').trim().toLowerCase();
   state.settings.profileComplete=true;
-  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:18});
+  await kvPut(META,{salt:bytesToB64(salt),createdAt:new Date().toISOString(),schemaVersion:19});
   await saveState();
   try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}
 }
@@ -587,6 +588,7 @@ const MAIN_MENU_ROWS=[
 function resetModuleState(){
   hideFullNames();
   codesUnlocked=false;
+  settingsView='menu';
   activePropertyId=null;
   editPropertyId=null;
   editLocationId=null;
@@ -1760,7 +1762,7 @@ function exportDatabasePayload(){
   return {
     product:'SCC-CTD House Checks',
     backupVersion:1,
-    schemaVersion:18,
+    schemaVersion:19,
     exportedAt:new Date().toISOString(),
     properties:state.properties,
     inactiveClients:state.inactiveClients,
@@ -1954,34 +1956,154 @@ function renderDatabase(){
 }
 
 /* ---------- Settings ---------- */
-function renderSettings(){
+function settingsBackToMenu(){
+  settingsView='menu';
+  renderSettings();
+}
+function renderSettingsMenu(){
+  const view=document.getElementById('view');
+  setModulePrevious(goHome);
+  view.innerHTML=`<section class="settings-button-stack">
+    <button class="settings-door" data-settings="profile"><span>👤</span><b>User Profile</b><i>›</i></button>
+    <button class="settings-door" data-settings="release"><span>🔐</span><b>Release Database</b><i>›</i></button>
+    <button class="settings-door" data-settings="load"><span>📥</span><b>Load Database</b><i>›</i></button>
+    <button class="settings-door" id="settingsSave"><span>💾</span><b>Save</b><i>✓</i></button>
+    <button class="settings-door" id="settingsRestart"><span>↻</span><b>Restart App</b><i>›</i></button>
+  </section>
+  <div id="settingsStatus" class="settings-status"></div>`;
+
+  view.querySelectorAll('[data-settings]').forEach(b=>b.onclick=()=>{
+    settingsView=b.dataset.settings;
+    renderSettings();
+  });
+
+  document.getElementById('settingsSave').onclick=async()=>{
+    const status=document.getElementById('settingsStatus');
+    try{
+      await saveState();
+      status.textContent='Saved to this device.';
+      setTimeout(()=>{if(status)status.textContent=''},1800);
+    }catch(e){
+      status.textContent='Save failed: '+(e?.message||e);
+    }
+  };
+
+  document.getElementById('settingsRestart').onclick=async()=>{
+    if(!confirm('Restart SCC-CTD House Checks? Your encrypted database will be saved first.'))return;
+    try{await saveState()}catch{}
+    location.reload();
+  };
+}
+function renderSettingsProfile(){
   const s=state.settings,view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="title">Setup & Settings</div><div class="muted">The report-text cell number is intentionally editable so you can test with your own phone before switching to the real recipient.</div></section>
-  <section class="panel"><div class="formgrid">
-    <div class="field"><label>Authorized User Name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
-    <div class="field"><label>Authorized User Cell Number</label><input id="authorizedUserCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}"></div>
-    <div class="field"><label>Work Email</label><div class="work-email-rule">Must end exactly in <b>@${WORK_EMAIL_DOMAIN}</b></div><input id="userWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
-    <div class="field"><label>Confirm Work Email</label><input id="userWorkEmailConfirm" type="text" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" value="" placeholder="Retype work email"></div>
-    <div class="field"><label>Organization</label><input id="organization" value="${esc(s.organization)}"></div>
-    <div class="field"><label>Report recipient label</label><input id="reportLabel" value="${esc(s.reportTextLabel)}"></div>
-    <div class="field"><label>Report Text Cell Number</label><input id="reportNumber" type="tel" inputmode="tel" value="${esc(fmtPhone(s.reportTextNumber))}"></div>
-    <div class="field"><label>Auto-lock minutes</label><input id="autoLock" type="number" min="1" max="120" value="${Number(s.autoLockMinutes)||15}"></div>
-  </div><div class="actions"><button class="btn" id="testText">Test Text</button><button class="btn primary" id="saveSettings">Save Settings</button><button class="btn" id="lockNow">Lock Now</button></div><div class="notice">Test Text opens Messages with a harmless draft to the configured number. The app never silently sends it.</div></section>`;
-  document.getElementById('testText').onclick=()=>{const n=digits(document.getElementById('reportNumber').value);if(n.length<10){alert('Enter a valid report-text cell number first.');return}openSms(n,'SCC-CTD House Checks TEST: report texting is configured correctly.')};
-  document.getElementById('saveSettings').onclick=async()=>{
+  setModulePrevious(settingsBackToMenu);
+  view.innerHTML=`<section class="panel">
+    <div class="title">User Profile</div>
+    <div class="formgrid">
+      <div class="field"><label>Authorized User Name</label><input id="reporterName" autocomplete="name" value="${esc(s.reporterName||s.driverName||'')}"></div>
+      <div class="field"><label>Authorized User Cell Number</label><input id="authorizedUserCell" type="tel" inputmode="tel" autocomplete="tel" value="${esc(fmtPhone(s.authorizedUserCell||''))}"></div>
+      <div class="field"><label>Work Email</label><div class="work-email-rule">Must end exactly in <b>@${WORK_EMAIL_DOMAIN}</b></div><input id="userWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(s.userWorkEmail||'')}" placeholder="name@${WORK_EMAIL_DOMAIN}"></div>
+      <div class="field"><label>Confirm Work Email</label><input id="userWorkEmailConfirm" type="text" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Retype work email"></div>
+      <div class="field"><label>Report Text Cell Number</label><input id="reportNumber" type="tel" inputmode="tel" value="${esc(fmtPhone(s.reportTextNumber||''))}"></div>
+      <div class="field"><label>Auto-lock Minutes</label><input id="autoLock" type="number" min="1" max="120" value="${Number(s.autoLockMinutes)||15}"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="testText">Test Text</button>
+      <button class="btn primary" id="saveUserSettings">Save User Profile</button>
+    </div>
+    <div id="profileSettingsStatus" class="muted"></div>
+  </section>`;
+
+  document.getElementById('testText').onclick=()=>{
+    const n=digits(document.getElementById('reportNumber').value);
+    if(n.length<10){alert('Enter a valid report-text cell number first.');return}
+    openSms(n,'SCC-CTD House Checks TEST: report texting is configured correctly.');
+  };
+
+  document.getElementById('saveUserSettings').onclick=async()=>{
     const reporterName=document.getElementById('reporterName').value.trim();
     const authorizedUserCell=digits(document.getElementById('authorizedUserCell').value);
     const userWorkEmail=normalizeWorkEmail(document.getElementById('userWorkEmail').value);
     const userWorkEmailConfirm=normalizeWorkEmail(document.getElementById('userWorkEmailConfirm').value);
-    if(!reporterName){alert('Enter the Authorized User Name.');return}
-    if(authorizedUserCell.length<10){alert('Enter the Authorized User Cell Number.');return}
-    if(!validWorkEmail(userWorkEmail)){alert(`Work Email must end exactly in @${WORK_EMAIL_DOMAIN}.`);return}
-    if(userWorkEmail!==userWorkEmailConfirm){alert('Work Email entries do not match.');return}
-    s.reporterName=reporterName;s.authorizedUserCell=authorizedUserCell;s.userWorkEmail=userWorkEmail;s.profileComplete=true;s.organization=document.getElementById('organization').value.trim()||'Organization';
-    s.reportTextLabel=document.getElementById('reportLabel').value.trim()||'Report Recipient';s.reportTextNumber=digits(document.getElementById('reportNumber').value);
-    s.autoLockMinutes=Math.max(1,Math.min(120,+document.getElementById('autoLock').value||15));await saveState();bumpLock();alert('Settings saved.');
+    const reportNumber=digits(document.getElementById('reportNumber').value);
+    const status=document.getElementById('profileSettingsStatus');
+
+    if(!reporterName){status.textContent='Enter the Authorized User Name.';return}
+    if(authorizedUserCell.length<10){status.textContent='Enter the Authorized User Cell Number.';return}
+    if(!validWorkEmail(userWorkEmail)){status.textContent=`Work Email must end exactly in @${WORK_EMAIL_DOMAIN}.`;return}
+    if(userWorkEmail!==userWorkEmailConfirm){status.textContent='Work Email entries do not match.';return}
+
+    s.reporterName=reporterName;
+    s.authorizedUserCell=authorizedUserCell;
+    s.userWorkEmail=userWorkEmail;
+    s.profileComplete=true;
+    s.reportTextNumber=reportNumber;
+    s.autoLockMinutes=Math.max(1,Math.min(120,+document.getElementById('autoLock').value||15));
+    await saveState();
+    bumpLock();
+    status.textContent='User profile saved.';
   };
-  document.getElementById('lockNow').onclick=()=>{cryptoKey=null;state=null;showLock()};
+}
+function renderSettingsReleaseDatabase(){
+  const view=document.getElementById('view');
+  setModulePrevious(settingsBackToMenu);
+  const defaultRecipient=state.settings.userWorkEmail||'';
+  view.innerHTML=`<section class="panel">
+    <div class="title">Release Database</div>
+    <div class="muted">Creates an encrypted portable SCC-CTD database for an approved Shawnee Counseling Center work email.</div>
+    <div class="field" style="margin-top:14px">
+      <label>Work Email Recipient</label>
+      <input id="databaseWorkEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(defaultRecipient)}" placeholder="name@${WORK_EMAIL_DOMAIN}">
+      <div class="field-help">Recipient must end exactly in @${WORK_EMAIL_DOMAIN}.</div>
+    </div>
+    <div class="actions"><button class="btn primary" id="releaseDatabaseNow">Release Encrypted Database</button></div>
+    <div class="notice">The app asks for your app PIN and then a separate transfer password. Share the transfer password separately from the database file.</div>
+  </section>`;
+  document.getElementById('releaseDatabaseNow').onclick=emailEncryptedDatabase;
+}
+function renderSettingsLoadDatabase(){
+  const view=document.getElementById('view');
+  setModulePrevious(settingsBackToMenu);
+  view.innerHTML=`<section class="panel">
+    <div class="title">Load Database</div>
+    <div class="muted">Choose an SCC-CTD encrypted backup from Files, Mail, or another location on this phone.</div>
+    <label class="load-db-target" for="settingsImportData">
+      <span class="load-db-icon">📥</span>
+      <strong>Choose Database File</strong>
+      <small>.sccbackup files are supported</small>
+    </label>
+    <input id="settingsImportData" type="file" accept=".sccbackup,application/octet-stream,application/json,text/plain,*/*" style="position:absolute;left:-9999px;width:1px;height:1px">
+    <div id="settingsImportMessage" class="settings-import-message"></div>
+    <div class="notice">Loading a normal database preserves this phone's PIN and local authorized-user identity. A Clean Inspection State reset clears only inspection/test history and day notes.</div>
+  </section>`;
+
+  const input=document.getElementById('settingsImportData');
+  input.onchange=async()=>{
+    const f=input.files?.[0];
+    const msg=document.getElementById('settingsImportMessage');
+    if(!f)return;
+    msg.className='settings-import-message working';
+    msg.textContent=`Selected: ${f.name}. Waiting for transfer password…`;
+    try{
+      await importPrivateData(f);
+      msg.className='settings-import-message success';
+      msg.textContent='Database loaded successfully.';
+      setTimeout(()=>{
+        settingsView='menu';
+        renderSettings();
+      },900);
+    }catch(e){
+      msg.className='settings-import-message error';
+      msg.textContent='Load failed: '+(e?.message||e);
+      input.value='';
+    }
+  };
+}
+function renderSettings(){
+  if(settingsView==='profile')return renderSettingsProfile();
+  if(settingsView==='release')return renderSettingsReleaseDatabase();
+  if(settingsView==='load')return renderSettingsLoadDatabase();
+  renderSettingsMenu();
 }
 
 start();
