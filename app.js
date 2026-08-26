@@ -1273,6 +1273,7 @@ function renderTonight(){
       <div class="kpi"><strong>${state.properties.length}</strong>Total Houses</div>
     </div>
     <div class="muted" style="margin-top:8px">Every configured house will appear on the final report, including houses marked Not Required Tonight.</div>
+    <div class="actions" style="margin-top:10px"><button class="btn" id="openHouseOrderFromTonight">↕ Order Houses for Tonight</button></div>
   </section>
   <section class="houserows">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
@@ -1299,6 +1300,10 @@ function renderTonight(){
     b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();b.onclick()}};
   });
   document.getElementById('finishRun').onclick=()=>{hideFullNames();screen='report';reportApproved=false;render()};
+  document.getElementById('openHouseOrderFromTonight').onclick=()=>{
+    houseOrderReturnTo=()=>{screen='inspections';inspectionView='run';render()};
+    screen='houseOrder';render();
+  };
 }
 function roomCheckHtml(p,r,i){
   if(r.type==='open')return `<div class="room"><div class="roomno">${esc(r.room)}</div><div><span class="tag open">OPEN / EMPTY</span></div></div>`;
@@ -1414,7 +1419,7 @@ function renderProperties(){
     </div>`).join('')||'<div class="route-empty">No properties yet. Add one above.</div>'}</section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderProperties()};
-  document.getElementById('openHouseOrder').onclick=()=>{screen='houseOrder';render()};
+  document.getElementById('openHouseOrder').onclick=()=>{houseOrderReturnTo=()=>{screen='properties';render()};screen='houseOrder';render()};
   view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
     if(!await requestPin('edit this property and roster'))return;
     editPropertyId=b.dataset.edit;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
@@ -1436,16 +1441,17 @@ function renderProperties(){
   };
   if(editPropertyId)renderPropertyEditor(state.properties.find(p=>p.id===editPropertyId));
 }
+let houseOrderReturnTo=()=>{screen='properties';render()};
 function renderHouseOrder(){
   const view=document.getElementById('view');
-  setModulePrevious(()=>{screen='properties';render()});
+  setModulePrevious(()=>houseOrderReturnTo());
   const ordered=orderedProperties();
   view.innerHTML=`<section class="panel">
     <div class="title">Order Houses</div>
     <div class="muted">${ordered.length?`${ordered.length} house${ordered.length===1?'':'s'}. Use the arrows to set the order you actually travel — this order is used everywhere houses are listed: tonight's checks, reports, and lock codes.`:'Add properties first.'}</div>
   </section>
   <section class="panel route-order-panel"><div id="houseOrderList" class="route-order-list"></div></section>
-  <div class="actions"><button class="btn primary" id="resetHouseOrder">Reset to Automatic Order</button></div>`;
+  <div class="actions"><button class="btn primary" id="resetHouseOrder">Reset to Automatic Order</button><button class="btn" disabled title="Coming soon">🗺️ Smart Route to Google Maps • Coming Soon</button></div>`;
   drawHouseOrder();
   document.getElementById('resetHouseOrder').onclick=async()=>{
     if(!confirm('Clear the manual order and go back to automatic (required-first, by street/number)?'))return;
