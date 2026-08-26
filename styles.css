@@ -1499,3 +1499,27 @@ a{color:var(--accent)}
   .houserow{grid-template-columns:8px minmax(0,1fr) 76px;padding:10px}
   .houserow-controls{grid-template-columns:36px 36px;width:76px}
 }
+
+/* v1.6.13 situation flag (fixes the old broken/recursive notice) */
+.situation-flag{
+  display:inline-block;margin:2px 0 4px;padding:2px 8px;border-radius:999px;
+  font-size:10px;font-weight:900;letter-spacing:.04em;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+}
+.situation-yellow{color:#e5c85b;border-color:rgba(229,200,91,.4)}
+.situation-gray{color:#c3ccd2;border-color:rgba(139,150,158,.4)}
+.situation-darkgray{color:#aeb6bb;border-color:rgba(111,119,125,.4)}
+.situation-rose{color:#e7a3a5;border-color:rgba(215,143,145,.4)}
+.situation-red{color:#e79591;border-color:rgba(198,90,84,.4)}
+.situation-green{color:#8fe0bd;border-color:rgba(79,186,146,.4)}
+
+/* v1.6.13 compact operational rows for the active-inspection list */
+.tonightrow{
+  grid-template-columns:10px minmax(0,1fr) 54px;
+  padding:12px 12px 12px 14px;cursor:pointer;
+}
+.tonightrow:hover,.tonightrow:focus-visible{background:rgba(255,255,255,.05);outline:none}
+.tonightrow:focus-visible{box-shadow:0 0 0 2px rgba(119,211,61,.4)}
+.houserow-main small{display:block;margin-top:2px}
+.progress.thin{height:5px;margin-top:6px}
+.tonight-controls{justify-self:end;align-self:center;display:flex!important;align-items:center;justify-content:center}

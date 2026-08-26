@@ -1248,7 +1248,11 @@ function renderInspections(){
 
 /* ---------- Tonight ---------- */
 function houseClass(p){return `house-${propertySituationColor(p)||'none'} ${propertyNeedsChecks(p)?'':'not-required'}`}
-function propertySituationCardHtml(p){const c=propertySituationColor(p);return c?`${propertySituationCardHtml(p)}`:''}
+function propertySituationCardHtml(p){
+  const s=propertySituation(p);
+  if(!s.color)return '';
+  return `<div class="situation-flag situation-${s.color}">${esc(s.label.toUpperCase())}</div>`;
+}
 
 function renderTonight(){
   const view=document.getElementById('view'),T=totalsFor();
@@ -1262,26 +1266,30 @@ function renderTonight(){
     </div>
     <div class="muted" style="margin-top:8px">Every configured house will appear on the final report, including houses marked Not Required Tonight.</div>
   </section>
-  <section class="grid">${orderedProperties().map(p=>{
+  <section class="houserows">${orderedProperties().map(p=>{
     const g=progress(p),open=p.rooms.filter(r=>r.type==='open').length,noBed=p.rooms.filter(r=>r.type==='nobed').length;
-    return `<article class="card ${houseClass(p)}">
-      <h3>${propertySituationColor(p)?`<span class="house-color ${propertySituationColor(p)}"></span> `:''}${esc(p.address)}</h3>${propertySituationCardHtml(p)}
-      <div class="houseflag">${
-        !propertyNeedsChecks(p)
-          ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
-          : g.missing>0
-            ? `<span class="required">● CHECKS REQUIRED</span>`
-            : `<span class="complete">● COMPLETE</span>`
-      }</div>
-      <div class="meta">${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} required checked`} • ${open} open • ${noBed} no bed</div>
-      <div class="progress"><span style="width:${g.pct}%"></span></div>
-      <div class="actions"><button class="btn ${propertyNeedsChecks(p)?'primary':''}" data-open="${esc(p.id)}">${propertyNeedsChecks(p)?'Open House':'View House'}</button>${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</div>
-    </article>`;
+    const flag=!propertyNeedsChecks(p)
+      ? `<span class="notrequired">● NO REQUIRED CLIENTS</span>`
+      : g.missing>0
+        ? `<span class="required">● CHECKS REQUIRED</span>`
+        : `<span class="complete">● COMPLETE</span>`;
+    return `<div class="houserow tonightrow ${houseClass(p)}" data-open="${esc(p.id)}" role="button" tabindex="0">
+      <span class="houserow-color ${propertySituationColor(p)||'none'}"></span>
+      <span class="houserow-main">
+        <b>${esc(p.address)}</b>${propertySituationCardHtml(p)}
+        <small>${flag} · ${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} checked`} • ${open} open • ${noBed} no bed</small>
+        ${propertyNeedsChecks(p)?`<div class="progress thin"><span style="width:${g.pct}%"></span></div>`:''}
+      </span>
+      <span class="houserow-controls tonight-controls">${propertyNeedsChecks(p)?`<span class="progress-ring ${g.pct>=100?'complete':''}" style="--pct:${g.pct}"><span>${g.pct}%</span></span>`:'<span class="badge">N/R</span>'}</span>
+    </div>`;
   }).join('')||'<div class="panel"><div class="muted">No properties are loaded yet. Import the private starter data from Database, or add properties manually.</div></div>'}</section>
   <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
-  view.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()});
+  view.querySelectorAll('[data-open]').forEach(b=>{
+    b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()};
+    b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();b.onclick()}};
+  });
   document.getElementById('finishRun').onclick=()=>{hideFullNames();screen='report';reportApproved=false;render()};
 }
 function roomCheckHtml(p,r,i){
