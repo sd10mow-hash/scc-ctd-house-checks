@@ -1,6 +1,13 @@
-# SCC-CTD House Checks v1.6.13
+# SCC-CTD House Checks v1.6.14
 
 GitHub-ready public PWA build.
+
+## v1.6.14 real smart route + per-house navigate
+
+- Smart Route on the Order Houses screen is now live, not a placeholder. It groups houses by street and orders each group by house number, entirely on this phone — it never sends your house list to an outside service. You can still nudge any house up or down by hand afterward.
+- Every house row — on Order Houses and on tonight's active checklist — now has a small 📍 button that opens driving directions to that one address directly, without going into Route Planner first.
+- Confirmed the "Continue Inspection" step is not duplicate logic: an active inspection has always resumed through the calendar day by design (since v1.5.4), so a second one can't accidentally get started.
+
 
 ## v1.6.13 branding, compact lists, manual house order, stability fixes
 

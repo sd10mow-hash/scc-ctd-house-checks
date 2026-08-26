@@ -51,3 +51,8 @@ v1.6.13 BRANDING, COMPACT LISTS, MANUAL HOUSE ORDER, STABILITY FIXES
 - Fixed a rapid-tap race on PIN-gated destructive actions (delete property, add property, reactivate/deactivate client, lock final report) that could leave the button stuck unresponsive under fast repeated taps.
 
 PHONE UPDATE: after uploading v1.6.13, reload the GitHub Pages URL in Safari. The header now reads v1.6.13 — if it doesn't, the new files haven't loaded yet.
+
+v1.6.14 REAL SMART ROUTE + PER-HOUSE NAVIGATE
+- Smart Route on the Order Houses screen is now live, not a placeholder. It groups houses by street and orders each group by house number, entirely on this phone — it never sends your house list to an outside service. You can still nudge any house up or down by hand afterward.
+- Every house row — on Order Houses and on tonight's active checklist — now has a small 📍 button that opens driving directions to that one address directly, without going into Route Planner first.
+- Confirmed the "Continue Inspection" step is not duplicate logic: an active inspection has always resumed through the calendar day by design (since v1.5.4), so a second one can't accidentally get started. The Order Houses button is one tap past that, same as reaching the checklist itself.

@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.13';
+const VERSION='1.6.14';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -95,6 +95,18 @@ function moveHouseOrder(i,d){
   const j=i+d;if(j<0||j>=current.length)return;
   [current[i],current[j]]=[current[j],current[i]];
   state.settings.houseOrder=current;
+}
+function smartHouseOrder(list=state.properties){
+  // Local street/house-number grouping only — properties carry no coordinates,
+  // and this app never sends the house list to an external optimizer.
+  const groups=[],byStreet=new Map();
+  for(const p of list){
+    const a=addressParts(p.address),key=a.street||String(p.address||'').toLowerCase();
+    if(!byStreet.has(key)){const g={key,items:[]};byStreet.set(key,g);groups.push(g)}
+    byStreet.get(key).items.push(p);
+  }
+  for(const g of groups)g.items.sort((a,b)=>addressParts(a.address).number-addressParts(b.address).number);
+  return groups.flatMap(g=>g.items);
 }
 function ensureBaseLocations(list){
   // Route locations stay in the encrypted local database. Public app files do not seed private addresses.
@@ -1285,7 +1297,7 @@ function renderTonight(){
     return `<div class="houserow tonightrow ${houseClass(p)}" data-open="${esc(p.id)}" role="button" tabindex="0">
       <span class="houserow-color ${propertySituationColor(p)||'none'}"></span>
       <span class="houserow-main">
-        <b>${esc(p.address)}</b>${propertySituationCardHtml(p)}
+        <b>${esc(p.address)}</b> <button class="row-navlink" data-nav="${esc(p.id)}" aria-label="Get directions to this house" title="Get directions">📍</button>${propertySituationCardHtml(p)}
         <small>${flag} · ${p.beds} beds • ${!propertyNeedsChecks(p)?'no required clients':`${g.done}/${g.total} checked`} • ${open} open • ${noBed} no bed</small>
         ${propertyNeedsChecks(p)?`<div class="progress thin"><span style="width:${g.pct}%"></span></div>`:''}
       </span>
@@ -1295,6 +1307,10 @@ function renderTonight(){
   <div class="actions"><button class="btn primary" id="finishRun">Finish Run → Preview Complete Report</button></div>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderInspections()};
+  view.querySelectorAll('[data-nav]').forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const p=state.properties.find(x=>x.id===b.dataset.nav);if(p)openClientAddressGoogleMaps(p.address);
+  });
   view.querySelectorAll('[data-open]').forEach(b=>{
     b.onclick=()=>{activePropertyId=b.dataset.open;revealCode=false;render()};
     b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();b.onclick()}};
@@ -1448,11 +1464,16 @@ function renderHouseOrder(){
   const ordered=orderedProperties();
   view.innerHTML=`<section class="panel">
     <div class="title">Order Houses</div>
-    <div class="muted">${ordered.length?`${ordered.length} house${ordered.length===1?'':'s'}. Use the arrows to set the order you actually travel — this order is used everywhere houses are listed: tonight's checks, reports, and lock codes.`:'Add properties first.'}</div>
+    <div class="muted">${ordered.length?`${ordered.length} house${ordered.length===1?'':'s'}. Use the arrows to set the order you actually travel, or 📍 to open directions to any single house — this order is used everywhere houses are listed: tonight's checks, reports, and lock codes.`:'Add properties first.'}</div>
   </section>
   <section class="panel route-order-panel"><div id="houseOrderList" class="route-order-list"></div></section>
-  <div class="actions"><button class="btn primary" id="resetHouseOrder">Reset to Automatic Order</button><button class="btn" disabled title="Coming soon">🗺️ Smart Route to Google Maps • Coming Soon</button></div>`;
+  <div class="actions"><button class="btn primary" id="smartHouseRoute">🧭 Smart Route (Street Order)</button><button class="btn" id="resetHouseOrder">Reset to Automatic Order</button></div>
+  <div class="muted" style="margin-top:6px">Smart Route groups houses by street and orders each group by house number. It runs entirely on this phone — it never sends your house list anywhere else. You can still nudge any house up or down afterward.</div>`;
   drawHouseOrder();
+  document.getElementById('smartHouseRoute').onclick=async()=>{
+    state.settings.houseOrder=smartHouseOrder(state.properties).map(p=>p.id);
+    await saveState();drawHouseOrder();
+  };
   document.getElementById('resetHouseOrder').onclick=async()=>{
     if(!confirm('Clear the manual order and go back to automatic (required-first, by street/number)?'))return;
     state.settings.houseOrder=[];await saveState();renderHouseOrder();
@@ -1464,11 +1485,15 @@ function drawHouseOrder(){
   box.innerHTML=ordered.length?ordered.map((p,i)=>`<div class="route houserow-order">
       <b>${i+1}</b>
       <span><span class="houserow-color ${propertySituationColor(p)||'none'}"></span> ${esc(p.address)}<small class="route-row-sub">${propertyNeedsChecks(p)?'required checks':'no required checks'}</small></span>
-      <span class="route-row-controls">
+      <span class="route-row-controls route-row-controls-3">
+        <button class="route-arrow" data-nav="${esc(p.id)}" aria-label="Get directions">📍</button>
         <button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move house up">↑</button>
         <button class="route-arrow" data-down="${i}" ${i===ordered.length-1?'disabled':''} aria-label="Move house down">↓</button>
       </span>
     </div>`).join(''):'<div class="route-empty">No houses to order yet.</div>';
+  box.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{
+    const p=state.properties.find(x=>x.id===b.dataset.nav);if(p)openClientAddressGoogleMaps(p.address);
+  });
   box.querySelectorAll('[data-up]').forEach(b=>b.onclick=async()=>{moveHouseOrder(+b.dataset.up,-1);await saveState();drawHouseOrder()});
   box.querySelectorAll('[data-down]').forEach(b=>b.onclick=async()=>{moveHouseOrder(+b.dataset.down,1);await saveState();drawHouseOrder()});
 }

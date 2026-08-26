@@ -1523,3 +1523,15 @@ a{color:var(--accent)}
 .houserow-main small{display:block;margin-top:2px}
 .progress.thin{height:5px;margin-top:6px}
 .tonight-controls{justify-self:end;align-self:center;display:flex!important;align-items:center;justify-content:center}
+
+/* v1.6.14 smart route + per-house navigate */
+.route-row-controls-3{grid-template-columns:36px 36px 36px;width:120px}
+.route-row-controls-3 .route-arrow{width:36px;height:36px;font-size:17px}
+.houserow-order{grid-template-columns:28px minmax(0,1fr) 120px}
+.row-navlink{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;border-radius:8px;border:1px solid var(--border);
+  background:rgba(119,211,61,.08);vertical-align:middle;font-size:13px;line-height:1;
+  padding:0;
+}
+.row-navlink:active{background:rgba(119,211,61,.18)}

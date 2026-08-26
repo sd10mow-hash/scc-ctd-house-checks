@@ -1,13 +1,13 @@
-const CACHE='scc-housechecks-v1.6.13';
-const FALLBACK='./index.html?v=1.6.13';
+const CACHE='scc-housechecks-v1.6.14';
+const FALLBACK='./index.html?v=1.6.14';
 const ASSETS=[
   FALLBACK,
-  './styles.css?v=1.6.13',
-  './app.js?v=1.6.13',
-  './manifest.webmanifest?v=1.6.13',
-  './icon-180.png?v=1.6.13',
-  './icon-192.png?v=1.6.13',
-  './icon-512.png?v=1.6.13'
+  './styles.css?v=1.6.14',
+  './app.js?v=1.6.14',
+  './manifest.webmanifest?v=1.6.14',
+  './icon-180.png?v=1.6.14',
+  './icon-192.png?v=1.6.14',
+  './icon-512.png?v=1.6.14'
 ];
 self.addEventListener('install',e=>{
   self.skipWaiting();
