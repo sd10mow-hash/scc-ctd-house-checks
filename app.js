@@ -518,8 +518,9 @@ async function verifyPin(pin){
   }catch{return false}
 }
 function requestPin(reason='modify this record'){
+  if(document.querySelector('.pin-overlay.admin-pin-active'))return Promise.resolve(false);
   return new Promise(resolve=>{
-    const wrap=document.createElement('div');wrap.className='pin-overlay';
+    const wrap=document.createElement('div');wrap.className='pin-overlay admin-pin-active';
     wrap.innerHTML=`<div class="pin-dialog"><div class="title">PIN Required</div><div class="muted">Enter the app PIN to ${esc(reason)}.</div><input id="adminPinInput" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN"><div class="error" id="adminPinError"></div><div class="actions"><button class="btn" id="adminPinCancel">Cancel</button><button class="btn primary" id="adminPinOk">Continue</button></div></div>`;
     document.body.appendChild(wrap);const input=wrap.querySelector('#adminPinInput'),err=wrap.querySelector('#adminPinError');input.focus();
     const done=v=>{wrap.remove();resolve(v)};
@@ -1071,37 +1072,44 @@ async function exitFinalPreview(){
   inspectionView='run';
   renderInspections();
 }
+let lockingFinalReport=false;
 async function lockFinalInspectionReport(){
-  const gate=inspectionFinalGate();
-  if(!gate.ready){
-    const issue=gate.noteIssues[0];
-    alert(issue
-      ? `Final report cannot be locked. ${displayClientName(issue.name)} at ${issue.address} still requires a note.`
-      : `Final report cannot be locked. ${gate.totals.missing} required client field${gate.totals.missing===1?' is':'s are'} still unresolved.`);
-    return;
-  }
-  if(!finalPreviewIsCurrent()){
-    alert('The final report must be previewed after the most recent inspection change before it can be locked.');
-    return;
-  }
-  if(!await requestPin('lock the final inspection report'))return;
+  if(lockingFinalReport)return;
+  lockingFinalReport=true;
+  try{
+    const gate=inspectionFinalGate();
+    if(!gate.ready){
+      const issue=gate.noteIssues[0];
+      alert(issue
+        ? `Final report cannot be locked. ${displayClientName(issue.name)} at ${issue.address} still requires a note.`
+        : `Final report cannot be locked. ${gate.totals.missing} required client field${gate.totals.missing===1?' is':'s are'} still unresolved.`);
+      return;
+    }
+    if(!finalPreviewIsCurrent()){
+      alert('The final report must be previewed after the most recent inspection change before it can be locked.');
+      return;
+    }
+    if(!await requestPin('lock the final inspection report'))return;
 
-  const finishedDate=state.currentRun.runDate||inspectionTodayKey();
-  const snap=currentSnapshot(new Date().toISOString()),T=totalsFor(snap.properties,snap.checks);
-  const locked={...snap,inspectionDate:finishedDate,lockedAt:new Date().toISOString(),locked:true,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired};
-  state.history.push(locked);
-  state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{},previewSignature:''};
-  reportApproved=false;
-  hideFullNames();
-  await saveState();
+    const finishedDate=state.currentRun.runDate||inspectionTodayKey();
+    const snap=currentSnapshot(new Date().toISOString()),T=totalsFor(snap.properties,snap.checks);
+    const locked={...snap,inspectionDate:finishedDate,lockedAt:new Date().toISOString(),locked:true,checked:T.checked,required:T.required,missing:T.missing,notRequired:T.notRequired};
+    state.history.push(locked);
+    state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{},previewSignature:''};
+    reportApproved=false;
+    hideFullNames();
+    await saveState();
 
-  screen='inspections';
-  historyCalendarDate=dateFromKey(finishedDate);
-  inspectionDayKey=finishedDate;
-  historySelectedDate=finishedDate;
-  historyOpenId=locked.id;
-  inspectionView='historyReport';
-  render();
+    screen='inspections';
+    historyCalendarDate=dateFromKey(finishedDate);
+    inspectionDayKey=finishedDate;
+    historySelectedDate=finishedDate;
+    historyOpenId=locked.id;
+    inspectionView='historyReport';
+    render();
+  }finally{
+    lockingFinalReport=false;
+  }
 }
 
 function renderInspections(){
@@ -1412,14 +1420,17 @@ function renderProperties(){
     editPropertyId=b.dataset.edit;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   });
   view.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{
-    const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p)return;
-    if(!await requestPin(`remove ${p.address}`))return;
-    if(!confirm(`Remove ${p.address}? Assigned clients will become ACTIVE • UNASSIGNED. Their client profiles will be retained.`))return;
+    if(b.disabled)return;b.disabled=true;
+    const p=state.properties.find(x=>x.id===b.dataset.delete);if(!p){b.disabled=false;return}
+    if(!await requestPin(`remove ${p.address}`)){b.disabled=false;return}
+    if(!confirm(`Remove ${p.address}? Assigned clients will become ACTIVE • UNASSIGNED. Their client profiles will be retained.`)){b.disabled=false;return}
     p.rooms.filter(r=>r.type==='client').forEach(r=>archiveClient(r,p.address,r.room));
     state.properties=state.properties.filter(x=>x.id!==p.id);state.route.stops=state.route.stops.filter(s=>!(s.kind==='property'&&s.id===p.id));await saveState();renderProperties();
   });
   document.getElementById('addProperty').onclick=async()=>{
-    if(!await requestPin('add a property'))return;
+    const btn=document.getElementById('addProperty');
+    if(btn.disabled)return;btn.disabled=true;
+    if(!await requestPin('add a property')){btn.disabled=false;return}
     const p=normalizeProperty({id:uuid(),address:'New Property',doorCode:'',beds:1,checkRequired:true,houseColor:'',rooms:[{room:'1',type:'open',name:'OPEN',checkRequired:true}]});
     state.properties.push(p);editPropertyId=p.id;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   };
@@ -1687,15 +1698,19 @@ function showSecureClientProfile(c){
   wrap.querySelector('#editSecureClient').onclick=()=>{wrap.remove();editClientProfile({record:c})};
   if(inactive){
     wrap.querySelector('#reactivateSecureClient').onclick=async()=>{
-      if(!await requestPin('reactivate this client'))return;
+      const btn=wrap.querySelector('#reactivateSecureClient');
+      if(btn.disabled)return;btn.disabled=true;
+      if(!await requestPin('reactivate this client')){btn.disabled=false;return}
       c.status='active';c.inactiveAt='';c.updatedAt=new Date().toISOString();
       state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
       await saveState();wrap.remove();renderClientSearch();
     };
   }else{
     wrap.querySelector('#deactivateSecureClient').onclick=async()=>{
-      if(!await requestPin('deactivate this client'))return;
-      if(!confirm(`Deactivate ${displayClientName(c.name)}?${a?' Their current room will become OPEN.':''}`))return;
+      const btn=wrap.querySelector('#deactivateSecureClient');
+      if(btn.disabled)return;btn.disabled=true;
+      if(!await requestPin('deactivate this client')){btn.disabled=false;return}
+      if(!confirm(`Deactivate ${displayClientName(c.name)}?${a?' Their current room will become OPEN.':''}`)){btn.disabled=false;return}
       const current=clientAssignment(c.clientId);
       if(current)unassignRoomClient(current.property,current.room);
       c.status='inactive';c.inactiveAt=new Date().toISOString();c.updatedAt=new Date().toISOString();
