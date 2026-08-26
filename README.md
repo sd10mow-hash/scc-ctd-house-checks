@@ -1,6 +1,17 @@
-# SCC-CTD House Checks v1.6.12
+# SCC-CTD House Checks v1.6.13
 
 GitHub-ready public PWA build.
+
+## v1.6.13 branding, compact lists, manual house order, stability fixes
+
+- Rebranded all in-app accent colors from the old placeholder teal to the actual Shawnee hand-mark green, so the app and its icon finally match.
+- Client • Secure search is now two 3-character boxes (First 3 / Last 3) instead of one free-text field, matching the masked-name key exactly. Typing the third letter in the first box auto-advances to the second.
+- Properties & Rosters list is now compact single-line rows instead of large stacked cards.
+- New "↕ Order Houses" screen (reachable from Properties & Rosters and from tonight's active house-check list) lets you set the actual travel order by hand, using the same up/down arrows as Route Planner. This order now drives every house list in the app: tonight's checks, reports, and lock codes. Leaving it untouched keeps the previous automatic order (required-first, by street/number).
+- Tonight's active house-check list is now compact rows too, with no edit or delete controls — ordering only, since houses can't be added/removed mid-run.
+- Fixed a real bug: a property marked with a special situation (Open, Not Moved Yet, Out of Service, Can Not Bill For) would previously crash that screen outright. It now shows a small status badge instead.
+- Fixed a rapid-tap race on PIN-gated destructive actions (delete property, add property, reactivate/deactivate client, lock final report) that could leave the button stuck unresponsive under fast repeated taps.
+
 
 ## v1.6.12 central client registry / housing assignment
 
