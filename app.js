@@ -9,7 +9,7 @@ const STORE='kv', META='meta', DATA='data';
 const ENC=new TextEncoder(), DEC=new TextDecoder();
 let cryptoKey=null,state=null,screen='home',activePropertyId=null,editPropertyId=null,editLocationId=null;
 let revealCode=false,reportApproved=false,historyOpenId=null,autoLockTimer=null;
-let showFullNames=false,nameRevealTimer=null,clientSearchQuery='';
+let showFullNames=false,nameRevealTimer=null,clientSearchFirst='',clientSearchLast='';
 let historyCalendarDate=new Date(),historySelectedDate=null;
 let inspectionView='calendar',inspectionDayKey=null,reportOrigin='menu';
 let settingsView='menu';
@@ -82,7 +82,20 @@ function compareProperties(a,b){
   const ar=propertyNeedsChecks(a)?0:1,br=propertyNeedsChecks(b)?0:1;if(ar!==br)return ar-br;
   const A=addressParts(a.address),B=addressParts(b.address);if(A.street!==B.street)return A.street.localeCompare(B.street);return A.number-B.number||String(a.address).localeCompare(String(b.address));
 }
-function orderedProperties(list=state.properties){return [...list].sort(compareProperties)}
+function orderedProperties(list=state.properties){
+  const manual=state?.settings?.houseOrder;
+  if(!Array.isArray(manual)||!manual.length)return [...list].sort(compareProperties);
+  const pos=new Map(manual.map((id,i)=>[id,i]));
+  const inOrder=list.filter(p=>pos.has(p.id)).sort((a,b)=>pos.get(a.id)-pos.get(b.id));
+  const rest=list.filter(p=>!pos.has(p.id)).sort(compareProperties);
+  return [...inOrder,...rest];
+}
+function moveHouseOrder(i,d){
+  const current=orderedProperties().map(p=>p.id);
+  const j=i+d;if(j<0||j>=current.length)return;
+  [current[i],current[j]]=[current[j],current[i]];
+  state.settings.houseOrder=current;
+}
 function ensureBaseLocations(list){
   // Route locations stay in the encrypted local database. Public app files do not seed private addresses.
   return Array.isArray(list)?list:[];
@@ -336,6 +349,10 @@ function normalizeState(raw){
   })):[];
   const oldNum=s.settings?.reportTextNumber||s.settings?.transportNumber||'';
   d.settings={...d.settings,...(s.settings||{}),reportTextNumber:oldNum,reportTextLabel:s.settings?.reportTextLabel||s.settings?.transportLabel||'Report Recipient'};
+  {
+    const validIds=new Set(d.properties.map(p=>p.id));
+    d.settings.houseOrder=(Array.isArray(s.settings?.houseOrder)?s.settings.houseOrder:[]).filter(id=>validIds.has(id));
+  }
   if(!d.settings.reporterName&&s.settings?.driverName)d.settings.reporterName=s.settings.driverName;
   d.settings.authorizedUserCell=d.settings.authorizedUserCell||'';
   if(Number(s.schemaVersion||0)<12)d.settings.profileComplete=false;
@@ -816,6 +833,7 @@ function render(){
   if(screen==='history')return renderHistory();
   if(screen==='codes')return renderLockCodes();
   if(screen==='properties')return renderProperties();
+  if(screen==='houseOrder')return renderHouseOrder();
   if(screen==='vehicleLogs')return renderVehicleLogs();
   if(screen==='locations')return renderLocations();
   if(screen==='database')return renderDatabase();
@@ -1369,12 +1387,18 @@ function renderHouse(){
 /* ---------- Properties ---------- */
 function renderProperties(){
   const view=document.getElementById('view');
-  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">Required houses are listed first; houses on the same street flow by house number. Editing, adding, or removing a property requires the app PIN.</div></section>
+  const ordered=orderedProperties();
+  view.innerHTML=`<section class="panel"><div class="titlebar"><div class="title">Properties & Rosters</div>${nameRevealButton('Show Full Names')}</div><div class="muted">${state.settings.houseOrder?.length?'Order is set manually below. Use ↕ Order Houses to change travel order.':'Required houses are listed first; houses on the same street flow by house number.'} Editing, adding, or removing a property requires the app PIN.</div></section>
   <div id="propertyEditor"></div>
-  <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button></div>
-  <section class="grid">${orderedProperties().map(p=>`<article class="card ${houseClass(p)}"><h3>${esc(p.address)}</h3><div class="meta">${p.beds} beds • ${clients(p).length} clients • ${propertyNeedsChecks(p)?'required checks':'no required checks'}</div><div class="actions"><button class="btn" data-edit="${esc(p.id)}">Edit</button><button class="btn red" data-delete="${esc(p.id)}">Remove</button></div></article>`).join('')}</section>`;
+  <div class="actions"><button class="btn primary" id="addProperty">+ Add Property</button><button class="btn" id="openHouseOrder">↕ Order Houses</button></div>
+  <section class="houserows">${ordered.map(p=>`<div class="houserow ${houseClass(p)}">
+      <span class="houserow-color ${propertySituationColor(p)||'none'}"></span>
+      <span class="houserow-main"><b>${esc(p.address)}</b><small>${p.beds} beds • ${clients(p).length} clients • ${propertyNeedsChecks(p)?'required checks':'no required checks'}</small></span>
+      <span class="houserow-controls"><button class="route-arrow" data-edit="${esc(p.id)}" aria-label="Edit property">✎</button><button class="route-arrow houserow-del" data-delete="${esc(p.id)}" aria-label="Remove property">🗑</button></span>
+    </div>`).join('')||'<div class="route-empty">No properties yet. Add one above.</div>'}</section>`;
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderProperties()};
+  document.getElementById('openHouseOrder').onclick=()=>{screen='houseOrder';render()};
   view.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
     if(!await requestPin('edit this property and roster'))return;
     editPropertyId=b.dataset.edit;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
@@ -1392,6 +1416,36 @@ function renderProperties(){
     state.properties.push(p);editPropertyId=p.id;renderProperties();setTimeout(()=>document.getElementById('propertyEditor')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
   };
   if(editPropertyId)renderPropertyEditor(state.properties.find(p=>p.id===editPropertyId));
+}
+function renderHouseOrder(){
+  const view=document.getElementById('view');
+  setModulePrevious(()=>{screen='properties';render()});
+  const ordered=orderedProperties();
+  view.innerHTML=`<section class="panel">
+    <div class="title">Order Houses</div>
+    <div class="muted">${ordered.length?`${ordered.length} house${ordered.length===1?'':'s'}. Use the arrows to set the order you actually travel — this order is used everywhere houses are listed: tonight's checks, reports, and lock codes.`:'Add properties first.'}</div>
+  </section>
+  <section class="panel route-order-panel"><div id="houseOrderList" class="route-order-list"></div></section>
+  <div class="actions"><button class="btn primary" id="resetHouseOrder">Reset to Automatic Order</button></div>`;
+  drawHouseOrder();
+  document.getElementById('resetHouseOrder').onclick=async()=>{
+    if(!confirm('Clear the manual order and go back to automatic (required-first, by street/number)?'))return;
+    state.settings.houseOrder=[];await saveState();renderHouseOrder();
+  };
+}
+function drawHouseOrder(){
+  const box=document.getElementById('houseOrderList');
+  const ordered=orderedProperties();
+  box.innerHTML=ordered.length?ordered.map((p,i)=>`<div class="route houserow-order">
+      <b>${i+1}</b>
+      <span><span class="houserow-color ${propertySituationColor(p)||'none'}"></span> ${esc(p.address)}<small class="route-row-sub">${propertyNeedsChecks(p)?'required checks':'no required checks'}</small></span>
+      <span class="route-row-controls">
+        <button class="route-arrow" data-up="${i}" ${i===0?'disabled':''} aria-label="Move house up">↑</button>
+        <button class="route-arrow" data-down="${i}" ${i===ordered.length-1?'disabled':''} aria-label="Move house down">↓</button>
+      </span>
+    </div>`).join(''):'<div class="route-empty">No houses to order yet.</div>';
+  box.querySelectorAll('[data-up]').forEach(b=>b.onclick=async()=>{moveHouseOrder(+b.dataset.up,-1);await saveState();drawHouseOrder()});
+  box.querySelectorAll('[data-down]').forEach(b=>b.onclick=async()=>{moveHouseOrder(+b.dataset.down,1);await saveState();drawHouseOrder()});
 }
 function roomEditorHtml(p,r,i){
   const c=r.type==='client'?(clientById(r.clientId)||registryClientFromRoom(r,p.address,r.room)):null;
@@ -1592,7 +1646,7 @@ async function createNewClient(){
     if(!c.name||c.name==='Unnamed Client'){alert('Enter the client name.');return}
     c.status='active';c.inactiveAt='';upsertRegistryClient(c);
     state.inactiveClients=inactiveRegistryClients().map((x,i)=>normalizeInactiveClient(x,i));
-    await saveState();wrap.remove();clientSearchQuery=c.name.slice(0,3);renderClientSearch();
+    await saveState();wrap.remove();const kp=clientKeyParts(c.name);clientSearchFirst=kp.first;clientSearchLast=kp.last;renderClientSearch();
   };
 }
 function showSecureClientProfile(c){
@@ -1666,36 +1720,57 @@ async function editClientProfile(item){
     await saveState();wrap.remove();renderClientSearch();
   };
 }
-/* ---------- 3-letter Client Search / Unified Client Hub ---------- */
+/* ---------- 3x3 Client Search / Unified Client Hub ---------- */
 function clientHubRecords(){return allClientProfileRecords()}
-function clientHubMatches(item,query){
-  const q=String(query||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
-  if(q.length<3)return false;
-  const key=clientSearchKey(item.record.name);
-  return key.includes(q)||q.includes(key);
+function clientKeyParts(name){
+  const parts=partsOfName(name);
+  const first=(parts[0]||'').slice(0,3).replace(/[^a-z0-9]/gi,'').toLowerCase();
+  const last=(parts.length>1?parts[parts.length-1]:'').slice(0,3).replace(/[^a-z0-9]/gi,'').toLowerCase();
+  return {first,last};
+}
+function clientHubMatches3(item,qFirst,qLast){
+  const f=String(qFirst||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  const l=String(qLast||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  if(f.length<3&&l.length<3)return false;
+  const key=clientKeyParts(item.record.name);
+  if(f.length===3&&l.length===3)return key.first===f&&key.last===l;
+  if(f.length===3)return key.first===f;
+  return key.last===l;
 }
 function renderClientSearch(){
   const view=document.getElementById('view');
   setModulePrevious(goHome);
-  const compact=String(clientSearchQuery||'').replace(/[^a-z0-9]/gi,'');
-  const results=compact.length<3?[]:clientHubRecords().filter(x=>clientHubMatches(x,clientSearchQuery));
+  const fLen=String(clientSearchFirst||'').replace(/[^a-z0-9]/gi,'').length;
+  const lLen=String(clientSearchLast||'').replace(/[^a-z0-9]/gi,'').length;
+  const ready=fLen===3||lLen===3;
+  const results=ready?clientHubRecords().filter(x=>clientHubMatches3(x,clientSearchFirst,clientSearchLast)):[];
 
   view.innerHTML=`<section class="panel">
     <div class="titlebar">
       <div>
         <div class="title">CLIENT • SECURE</div>
-        <div class="muted">Create each client once. Search with any 3 letters, then assign housing separately from PROPERTIES.</div>
+        <div class="muted">Create each client once. Search 3+3, then assign housing separately from PROPERTIES.</div>
       </div>
       ${nameRevealButton()}
     </div>
     <div class="actions client-registry-actions"><button class="btn primary" id="newClient">+ New Client</button></div>
-    <div class="searchbar"><input id="clientSearch" autocomplete="off" placeholder="Type any 3 letters of the name" value="${esc(clientSearchQuery)}"><button class="btn" id="clearSearch">Clear</button></div>
+    <div class="searchbar-33">
+      <div class="search33-box">
+        <label>First 3</label>
+        <input id="clientSearchF" autocomplete="off" maxlength="3" inputmode="text" placeholder="ABC" value="${esc(clientSearchFirst)}">
+      </div>
+      <div class="search33-box">
+        <label>Last 3</label>
+        <input id="clientSearchL" autocomplete="off" maxlength="3" inputmode="text" placeholder="XYZ" value="${esc(clientSearchLast)}">
+      </div>
+      <button class="btn" id="clearSearch">Clear</button>
+    </div>
     <div class="privacy-hint">ACTIVE • UNASSIGNED clients are ready to be placed into an OPEN room from the Housing / Properties module.</div>
   </section>
 
   <section class="search-results">${
-    compact.length<3
-      ? '<div class="panel"><div class="muted">Enter at least 3 letters to search.</div></div>'
+    !ready
+      ? '<div class="panel"><div class="muted">Enter 3 letters in First 3 or Last 3 to search.</div></div>'
       : results.length
         ? results.map((x,i)=>{
             const a=clientAssignment(x.record.clientId);
@@ -1720,15 +1795,26 @@ function renderClientSearch(){
   }</section>`;
 
   document.getElementById('newClient').onclick=createNewClient;
-  const input=document.getElementById('clientSearch');
-  input.oninput=()=>{
-    clientSearchQuery=input.value;
+  const fBox=document.getElementById('clientSearchF');
+  const lBox=document.getElementById('clientSearchL');
+  fBox.oninput=()=>{
+    const clean=fBox.value.replace(/[^a-z0-9]/gi,'').slice(0,3).toUpperCase();
+    clientSearchFirst=clean;
+    const advance=clean.length===3;
     renderClientSearch();
-    const again=document.getElementById('clientSearch');
+    const again=document.getElementById(advance?'clientSearchL':'clientSearchF');
+    again?.focus();
+    if(!advance)again?.setSelectionRange(again.value.length,again.value.length);
+  };
+  lBox.oninput=()=>{
+    const clean=lBox.value.replace(/[^a-z0-9]/gi,'').slice(0,3).toUpperCase();
+    clientSearchLast=clean;
+    renderClientSearch();
+    const again=document.getElementById('clientSearchL');
     again?.focus();
     again?.setSelectionRange(again.value.length,again.value.length);
   };
-  document.getElementById('clearSearch').onclick=()=>{clientSearchQuery='';renderClientSearch()};
+  document.getElementById('clearSearch').onclick=()=>{clientSearchFirst='';clientSearchLast='';renderClientSearch();document.getElementById('clientSearchF')?.focus()};
   const nameToggle=document.getElementById('toggleNames');
   if(nameToggle)nameToggle.onclick=()=>{showFullNames?hideFullNames():revealFullNamesTemporarily();renderClientSearch()};
   view.querySelectorAll('[data-viewclient]').forEach(b=>b.onclick=()=>{

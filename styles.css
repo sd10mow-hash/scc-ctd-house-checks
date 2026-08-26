@@ -264,6 +264,18 @@ a{color:var(--accent)}
 .privacy-btn{border-color:rgba(119,211,61,.34)}
 .privacy-hint{font-size:11px;color:var(--muted);margin-top:8px}
 .searchbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:12px}
+.searchbar-33{display:flex;align-items:end;gap:10px;margin-top:12px;flex-wrap:wrap}
+.search33-box{display:flex;flex-direction:column;gap:4px;width:92px}
+.search33-box label{font-size:11px;font-weight:850;color:var(--muted);letter-spacing:.04em}
+.search33-box input{
+  width:100%;text-align:center;text-transform:uppercase;
+  font-size:22px;font-weight:950;letter-spacing:.18em;padding:10px 6px;
+}
+.searchbar-33 .btn{align-self:end;min-height:44px}
+@media(max-width:420px){
+  .search33-box{width:78px}
+  .search33-box input{font-size:19px}
+}
 .searchbar input{font-size:18px;letter-spacing:.06em}
 .search-results{display:grid;gap:8px}
 .search-result{display:flex;justify-content:space-between;gap:12px;align-items:center}
@@ -1461,4 +1473,29 @@ a{color:var(--accent)}
   .housing-assignment-card .actions{width:100%}
   .housing-assignment-card .actions .btn,.housing-assignment-card>.btn{width:100%}
   .housing-client-choice{grid-template-columns:1fr}
+}
+
+/* v1.6.13 compact property rows + manual house travel order */
+.houserows{display:grid;gap:8px}
+.houserow{
+  width:100%;display:grid;grid-template-columns:10px minmax(0,1fr) 84px;
+  gap:10px;align-items:center;padding:11px 12px 11px 14px;border-radius:12px;
+  background:rgba(255,255,255,.028);border:1px solid var(--border);position:relative;overflow:hidden;
+}
+.houserow-color{width:10px;height:10px;border-radius:50%;background:#3a444b;justify-self:center}
+.houserow-color.green{background:#4fba92}.houserow-color.gray{background:#8b969e}
+.houserow-color.yellow{background:#e5c85b}.houserow-color.red{background:#c65a54}
+.houserow-color.darkgray{background:#6f777d}.houserow-color.rose{background:#d78f91}
+.houserow-color.none{background:#3a444b}
+.houserow-main{display:grid;gap:2px;min-width:0}
+.houserow-main b{font-size:15px;font-weight:900;overflow-wrap:anywhere}
+.houserow-main small{color:var(--muted);font-size:11px;font-weight:700}
+.houserow-controls{display:grid;grid-template-columns:40px 40px;gap:4px;justify-self:end}
+.houserow-del{color:#ffb0aa}
+.houserow-order{grid-template-columns:28px minmax(0,1fr) 84px}
+.houserow-order .houserow-color{display:inline-block;justify-self:auto;margin-right:6px;vertical-align:middle}
+.route-row-sub{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-top:2px}
+@media(max-width:520px){
+  .houserow{grid-template-columns:8px minmax(0,1fr) 76px;padding:10px}
+  .houserow-controls{grid-template-columns:36px 36px;width:76px}
 }
