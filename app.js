@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.12';
+const VERSION='1.6.13';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';

@@ -41,4 +41,13 @@ PRIVACY + HISTORY v1.3.0:
 
 v1.6.12: central client registry (schema 26), secure new-client/deactivate workflow, and housing assignment by existing client search.
 
-PHONE UPDATE: after uploading v1.6.12, open https://sd10mow-hash.github.io/scc-ctd-house-checks/?build=1.6.12 directly in the phone browser. This build uses versioned assets and includes a safe Refresh App Files button.
+v1.6.13 BRANDING, COMPACT LISTS, MANUAL HOUSE ORDER, STABILITY FIXES
+- Rebranded all in-app accent colors from the old placeholder teal to the actual Shawnee hand-mark green, so the app and its icon finally match.
+- Client • Secure search is now two 3-character boxes (First 3 / Last 3) instead of one free-text field, matching the masked-name key exactly. Typing the third letter in the first box auto-advances to the second.
+- Properties & Rosters list is now compact single-line rows instead of large stacked cards.
+- New "↕ Order Houses" screen (reachable from Properties & Rosters and from tonight's active house-check list) lets you set the actual travel order by hand, using the same up/down arrows as Route Planner. This order now drives every house list in the app: tonight's checks, reports, and lock codes. Leaving it untouched keeps the previous automatic order (required-first, by street/number).
+- Tonight's active house-check list is now compact rows too, with no edit or delete controls — ordering only, since houses can't be added/removed mid-run.
+- Fixed a real bug: a property marked with a special situation (Open, Not Moved Yet, Out of Service, Can Not Bill For) would previously crash that screen outright. It now shows a small status badge instead.
+- Fixed a rapid-tap race on PIN-gated destructive actions (delete property, add property, reactivate/deactivate client, lock final report) that could leave the button stuck unresponsive under fast repeated taps.
+
+PHONE UPDATE: after uploading v1.6.13, reload the GitHub Pages URL in Safari. The header now reads v1.6.13 — if it doesn't, the new files haven't loaded yet.
