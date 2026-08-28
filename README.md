@@ -1,6 +1,16 @@
-# SCC-CTD House Checks v1.6.15
+# SCC-CTD House Checks v1.6.16
 
 GitHub-ready public PWA build.
+
+# SCC-CTD House Checks v1.6.16
+
+GitHub-ready public PWA build.
+
+## v1.6.16 report readability
+
+- Increased every font size on the printed/PNG house-check report (row text, column headers, notes, footer, house titles) by roughly 25-30% for readability.
+- The physical page size did not change — still fixed at 10.5in wide, same column proportions. Only the text got bigger.
+
 
 ## v1.6.15 cancel inspection
 

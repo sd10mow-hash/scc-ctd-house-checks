@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.15';
+const VERSION='1.6.16';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -948,7 +948,7 @@ function inspectionHouseListHtml(){
   const T=totalsFor(),gate=inspectionFinalGate(),previewCurrent=finalPreviewIsCurrent();
   const finalControls=!gate.ready
     ? `<section class="panel final-gate blocked">
-        <div class="final-gate-title">FINAL REPORT LOCKED</div>
+        <div class="final-gate-title">NOT YET READY TO LOCK</div>
         <div class="muted">${T.missing} required field${T.missing===1?'':'s'} remain unresolved. Every required client must be accounted for before a final report can be processed.</div>
       </section>`
     : !previewCurrent

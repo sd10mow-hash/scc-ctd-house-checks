@@ -57,6 +57,10 @@ v1.6.14 REAL SMART ROUTE + PER-HOUSE NAVIGATE
 - Every house row — on Order Houses and on tonight's active checklist — now has a small 📍 button that opens driving directions to that one address directly, without going into Route Planner first.
 - Confirmed the "Continue Inspection" step is not duplicate logic: an active inspection has always resumed through the calendar day by design (since v1.5.4), so a second one can't accidentally get started.
 
+v1.6.16 REPORT READABILITY
+- Increased every font size on the printed/PNG house-check report (row text, column headers, notes, footer, house titles) by roughly 25-30% for readability.
+- The physical page size did not change — still fixed at 10.5in wide, same column proportions. Only the text got bigger. The page can already grow taller than its 7.7in minimum on busy nights (it always could), so nothing gets clipped.
+
 v1.6.15 CANCEL INSPECTION
 - New "Cancel Inspection" button sits next to Continue Inspection on the active-inspection panel. Requires PIN, then a confirmation naming exactly what gets discarded (every status, note, and check entered so far tonight) before anything is touched.
 - Structurally cannot appear once a report has been locked for that date — locking already clears the active-run flag, and this button only renders while that flag is set. A defensive check in the handler backs that up regardless. The Order Houses button is one tap past that, same as reaching the checklist itself.
