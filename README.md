@@ -2,6 +2,16 @@
 
 GitHub-ready public PWA build.
 
+# SCC-CTD House Checks v1.6.15
+
+GitHub-ready public PWA build.
+
+## v1.6.15 cancel inspection
+
+- New "Cancel Inspection" button sits next to Continue Inspection on the active-inspection panel. Requires PIN, then a confirmation naming exactly what gets discarded (every status, note, and check entered so far tonight) before anything is touched.
+- Structurally cannot appear once a report has been locked for that date — locking already clears the active-run flag, and this button only renders while that flag is set.
+
+
 ## v1.6.14 real smart route + per-house navigate
 
 - Smart Route on the Order Houses screen is now live, not a placeholder. It groups houses by street and orders each group by house number, entirely on this phone — it never sends your house list to an outside service. You can still nudge any house up or down by hand afterward.

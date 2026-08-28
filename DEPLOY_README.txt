@@ -55,4 +55,8 @@ PHONE UPDATE: after uploading v1.6.13, reload the GitHub Pages URL in Safari. Th
 v1.6.14 REAL SMART ROUTE + PER-HOUSE NAVIGATE
 - Smart Route on the Order Houses screen is now live, not a placeholder. It groups houses by street and orders each group by house number, entirely on this phone — it never sends your house list to an outside service. You can still nudge any house up or down by hand afterward.
 - Every house row — on Order Houses and on tonight's active checklist — now has a small 📍 button that opens driving directions to that one address directly, without going into Route Planner first.
-- Confirmed the "Continue Inspection" step is not duplicate logic: an active inspection has always resumed through the calendar day by design (since v1.5.4), so a second one can't accidentally get started. The Order Houses button is one tap past that, same as reaching the checklist itself.
+- Confirmed the "Continue Inspection" step is not duplicate logic: an active inspection has always resumed through the calendar day by design (since v1.5.4), so a second one can't accidentally get started.
+
+v1.6.15 CANCEL INSPECTION
+- New "Cancel Inspection" button sits next to Continue Inspection on the active-inspection panel. Requires PIN, then a confirmation naming exactly what gets discarded (every status, note, and check entered so far tonight) before anything is touched.
+- Structurally cannot appear once a report has been locked for that date — locking already clears the active-run flag, and this button only renders while that flag is set. A defensive check in the handler backs that up regardless. The Order Houses button is one tap past that, same as reaching the checklist itself.

@@ -1,7 +1,7 @@
 
 (()=>{'use strict';
 
-const VERSION='1.6.14';
+const VERSION='1.6.15';
 const APP=document.getElementById('app');
 const DB_NAME='scc_housechecks_db';
 const WORK_EMAIL_DOMAIN='shawneecounseling.org';
@@ -1040,6 +1040,7 @@ function renderInspectionDayDetail(key){
     <div class="actions">
       <button class="btn primary" id="continueInspection">Continue Inspection</button>
       <button class="btn" id="viewCurrentReport">View Current Report</button>
+      <button class="btn red" id="cancelInspection">Cancel Inspection</button>
     </div>
   </section>`:''}
 
@@ -1074,6 +1075,22 @@ function renderInspectionDayDetail(key){
 
   const current=document.getElementById('viewCurrentReport');
   if(current)current.onclick=()=>{inspectionView='currentReport';renderInspections()};
+
+  const cancelBtn=document.getElementById('cancelInspection');
+  if(cancelBtn)cancelBtn.onclick=async()=>{
+    if(cancelBtn.disabled)return;cancelBtn.disabled=true;
+    try{
+      if(!inspectionRunIsActive()){alert('No active inspection to cancel.');return}
+      if(!await requestPin("cancel tonight's inspection")){return}
+      const T=totalsFor();
+      if(!confirm(`Cancel this inspection? Every status, note, and check already entered tonight (${T.checked} checked) will be discarded. This cannot be undone. No report will be saved for ${inspectionDateLabel(key,true)}.`)){return}
+      state.currentRun={id:uuid(),active:false,runDate:'',startedAt:'',checks:{},previewSignature:''};
+      inspectionView='day';
+      await saveState();renderInspections();
+    }finally{
+      cancelBtn.disabled=false;
+    }
+  };
 
   const goActive=document.getElementById('goActiveInspection');
   if(goActive)goActive.onclick=()=>{inspectionDayKey=activeInspectionDate();inspectionView='day';renderInspections()};
