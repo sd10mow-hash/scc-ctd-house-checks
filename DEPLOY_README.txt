@@ -1,4 +1,4 @@
-SCC-CTD HOUSE CHECKS v1.3.0 - TODAY BUILD
+SCC-CTD HOUSE CHECKS — FASTEST PHONE TEST
 
 FASTEST PHONE TEST
 1. Upload the CONTENTS of this folder to an HTTPS static host such as Netlify Drop.

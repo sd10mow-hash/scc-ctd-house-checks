@@ -1,7 +1,3 @@
-# SCC-CTD House Checks v1.6.14
-
-GitHub-ready public PWA build.
-
 # SCC-CTD House Checks v1.6.15
 
 GitHub-ready public PWA build.
